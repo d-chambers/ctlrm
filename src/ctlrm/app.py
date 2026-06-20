@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import Path
+from typing import Literal, Protocol
 
 from textual import events
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Footer, Header, Static
+from textual.screen import ModalScreen
+from textual.widgets import Button, Footer, Header, Input, Label, Select, Static
 
+from ctlrm.launcher import AgentLaunchRequest, AgentLauncher
+from ctlrm.models import Provider
+from ctlrm.tmux import SubprocessCommandRunner
 from ctlrm.workspace import Direction, Workspace
 
 ResizeHandleId = Literal["split-left", "split-right", "split-center"]
@@ -18,6 +23,10 @@ PANEL_TITLES = {
     "selected": "Selected",
     "tree": "Project Tree",
 }
+
+
+class LaunchesAgents(Protocol):
+    def launch(self, project: object, request: AgentLaunchRequest) -> object: ...
 
 
 @dataclass
@@ -47,6 +56,46 @@ class ResizeHandle(Static):
         self.app.end_resize()
 
 
+class AgentLaunchModal(ModalScreen[AgentLaunchRequest | None]):
+    CSS = """
+    AgentLaunchModal { align: center middle; }
+    #new-agent-dialog { width: 52; height: auto; border: heavy $accent; padding: 1 2; }
+    #new-agent-dialog Input, #new-agent-dialog Select { margin-bottom: 1; }
+    #new-agent-actions { height: auto; }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="new-agent-dialog"):
+            yield Label("New CLI Agent")
+            yield Select(
+                [("Codex", "codex"), ("Claude Code", "claude"), ("Pi", "pi")],
+                value="codex",
+                id="agent-provider",
+            )
+            yield Input(placeholder="id", value="codex-impl", id="agent-id")
+            yield Input(placeholder="name", value="Codex", id="agent-name")
+            yield Input(placeholder="role", value="implementer", id="agent-role")
+            with Horizontal(id="new-agent-actions"):
+                yield Button("Launch", id="launch-agent", variant="primary")
+                yield Button("Cancel", id="cancel-launch")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-launch":
+            self.dismiss(None)
+            return
+        if event.button.id != "launch-agent":
+            return
+        provider_value = self.query_one("#agent-provider", Select).value
+        self.dismiss(
+            AgentLaunchRequest(
+                id=self.query_one("#agent-id", Input).value.strip(),
+                name=self.query_one("#agent-name", Input).value.strip(),
+                role=self.query_one("#agent-role", Input).value.strip(),
+                provider=Provider(provider_value),
+            )
+        )
+
+
 class CtlrmApp(App[None]):
     CSS = """
     #main { height: 1fr; }
@@ -61,6 +110,7 @@ class CtlrmApp(App[None]):
     """
 
     BINDINGS = [
+        ("ctrl+n", "new_agent", "New agent"),
         ("ctrl+q", "quit", "Quit"),
         ("ctrl+shift+left", "focus_left", "Focus left"),
         ("ctrl+shift+right", "focus_right", "Focus right"),
@@ -68,9 +118,11 @@ class CtlrmApp(App[None]):
         ("ctrl+shift+down", "focus_down", "Focus down"),
     ]
 
-    def __init__(self, workspace: Workspace) -> None:
+    def __init__(self, workspace: Workspace, launcher: LaunchesAgents | None = None) -> None:
         super().__init__()
         self.workspace = workspace
+        registry_path = Path.home() / ".config" / "ctlrm" / "registry.toml"
+        self.launcher = launcher or AgentLauncher(SubprocessCommandRunner(), registry_path=registry_path)
         self._drag_state: DragState | None = None
 
     def compose(self) -> ComposeResult:
@@ -96,6 +148,9 @@ class CtlrmApp(App[None]):
         event.stop()
         self._resize_from_drag(event.screen_x, event.screen_y)
 
+    def action_new_agent(self) -> None:
+        self.push_screen(AgentLaunchModal(), self._handle_launch_modal_result)
+
     def action_focus_left(self) -> None:
         self._move_focus("left")
 
@@ -107,6 +162,15 @@ class CtlrmApp(App[None]):
 
     def action_focus_down(self) -> None:
         self._move_focus("down")
+
+    def launch_agent_from_request(self, request: AgentLaunchRequest) -> None:
+        project = self.workspace.selected_project()
+        if project is None:
+            self.workspace.status = "No project selected"
+            return
+        participant = self.launcher.launch(project, request)
+        self.workspace.selected_participant_id = participant.id
+        self._refresh_participants_panel()
 
     def begin_resize(self, handle_id: ResizeHandleId, start_x: int, start_y: int) -> None:
         self._drag_state = DragState(
@@ -120,6 +184,13 @@ class CtlrmApp(App[None]):
 
     def end_resize(self) -> None:
         self._drag_state = None
+
+    def _handle_launch_modal_result(self, request: AgentLaunchRequest | None) -> None:
+        if request is not None:
+            self.launch_agent_from_request(request)
+
+    def _refresh_participants_panel(self) -> None:
+        self.query_one("#participants", Static).update(self._participants_text())
 
     def _resize_from_drag(self, screen_x: int, screen_y: int) -> None:
         if self._drag_state is None:

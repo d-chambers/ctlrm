@@ -2,7 +2,8 @@ import pytest
 from pathlib import Path
 
 from ctlrm.app import CtlrmApp
-from ctlrm.models import Participant, Project
+from ctlrm.launcher import AgentLaunchRequest
+from ctlrm.models import Participant, Project, Provider
 from ctlrm.workspace import Workspace
 
 
@@ -58,3 +59,64 @@ async def test_active_panel_title_marker_moves_with_focus() -> None:
 
         assert pilot.app.query_one("#participants").border_title == "Participants"
         assert pilot.app.query_one("#file").border_title == "● Current File"
+
+
+def test_new_agent_binding_is_ctrl_n() -> None:
+    bindings = {binding[0] for binding in CtlrmApp.BINDINGS}
+
+    assert "ctrl+n" in bindings
+
+
+class FakeLauncher:
+    def __init__(self) -> None:
+        self.requests = []
+
+    def launch(self, project, request):
+        self.requests.append((project, request))
+        participant = Participant.agent(
+            request.id,
+            request.name,
+            request.role,
+            request.provider,
+            project.root,
+        )
+        project.participants.append(participant)
+        return participant
+
+
+@pytest.mark.asyncio
+async def test_launch_request_updates_roster() -> None:
+    project = Project(id="ctlrm", name="ctlrm", root=Path("/repo"), participants=[])
+    launcher = FakeLauncher()
+    app = CtlrmApp(Workspace.from_projects([project]), launcher=launcher)
+
+    async with app.run_test() as pilot:
+        app.launch_agent_from_request(
+            AgentLaunchRequest(
+                id="codex-impl",
+                name="Codex",
+                role="implementer",
+                provider=Provider.CODEX,
+            )
+        )
+        await pilot.pause()
+        assert "Codex" in str(pilot.app.query_one("#participants").render())
+        assert launcher.requests[0][1].id == "codex-impl"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_n_opens_new_agent_modal() -> None:
+    app = CtlrmApp(Workspace.from_projects([]))
+
+    async with app.run_test() as pilot:
+        await pilot.press("ctrl+n")
+        await pilot.pause()
+        assert pilot.app.screen.query_one("#new-agent-dialog")
+        assert pilot.app.screen.query_one("#agent-provider")
+
+
+def test_default_app_launcher_persists_to_user_registry() -> None:
+    app = CtlrmApp(Workspace.from_projects([]))
+
+    assert app.launcher.registry_path.name == "registry.toml"
+    assert app.launcher.registry_path.parent.name == "ctlrm"

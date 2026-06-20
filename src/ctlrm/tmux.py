@@ -29,6 +29,27 @@ class TmuxCommand:
     def capture_pane(cls, target: TmuxTargetRef) -> TmuxCommand:
         return cls("tmux", ["capture-pane", "-p", "-t", target.selector])
 
+    @classmethod
+    def new_session(cls, session: str, workdir: str) -> TmuxCommand:
+        return cls("tmux", ["new-session", "-d", "-A", "-s", session, "-c", workdir])
+
+    @classmethod
+    def split_window(cls, session: str, workdir: str, command: list[str]) -> TmuxCommand:
+        return cls(
+            "tmux",
+            [
+                "split-window",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                session,
+                "-c",
+                workdir,
+                *command,
+            ],
+        )
+
 
 class CommandRunner(Protocol):
     def run(self, command: TmuxCommand) -> str: ...

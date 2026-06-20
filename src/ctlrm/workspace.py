@@ -38,6 +38,21 @@ class Workspace(BaseModel):
             selected_participant_id=selected_participant.id if selected_participant else None,
         )
 
+    def selected_project(self) -> Project | None:
+        if self.selected_project_id is None:
+            return None
+        for project in self.projects:
+            if project.id == self.selected_project_id:
+                return project
+        return None
+
+    def add_participant(self, participant: object) -> None:
+        project = self.selected_project()
+        if project is None:
+            return
+        project.participants.append(participant)
+        self.selected_participant_id = participant.id
+
     def move_focus(self, direction: Direction) -> None:
         next_panel = self._next_panel(direction)
         self.active_panel = next_panel

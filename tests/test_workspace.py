@@ -81,3 +81,14 @@ def test_resizes_panel_extents_with_minimums() -> None:
 
     workspace.resize_selected(-100)
     assert workspace.selected_height == 5
+
+
+def test_add_participant_to_selected_project_selects_it() -> None:
+    project = Project(id="ctlrm", name="ctlrm", root=Path("/repo"))
+    workspace = Workspace.from_projects([project])
+    participant = Participant.human("derrick", "Derrick", "product-owner", Path("/repo"))
+
+    workspace.add_participant(participant)
+
+    assert workspace.projects[0].participants == [participant]
+    assert workspace.selected_participant_id == "derrick"

@@ -120,3 +120,31 @@ def test_default_app_launcher_persists_to_user_registry() -> None:
 
     assert app.launcher.registry_path.name == "registry.toml"
     assert app.launcher.registry_path.parent.name == "ctlrm"
+
+
+def test_hot_reload_requires_dev_mode() -> None:
+    reloaded = []
+    app = CtlrmApp(Workspace.from_projects([]), hot_reloader=reloaded.append)
+
+    app.action_hot_reload()
+
+    assert reloaded == []
+    assert app.workspace.status == "Hot reload requires --dev"
+
+
+def test_hot_reload_passes_current_workspace_in_dev_mode() -> None:
+    reloaded = []
+    workspace = Workspace.from_projects([])
+    app = CtlrmApp(workspace, dev_mode=True, hot_reloader=reloaded.append)
+
+    app.action_hot_reload()
+
+    assert reloaded == [workspace]
+
+
+@pytest.mark.asyncio
+async def test_dev_mode_mounts_hot_reload_binding() -> None:
+    app = CtlrmApp(Workspace.from_projects([]), dev_mode=True, hot_reloader=lambda workspace: None)
+
+    async with app.run_test():
+        assert app.dev_mode is True

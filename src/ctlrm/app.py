@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Callable, Literal, Protocol
 
 from textual import events
 from textual.app import App, ComposeResult
@@ -118,12 +118,21 @@ class CtlrmApp(App[None]):
         ("ctrl+shift+down", "focus_down", "Focus down"),
     ]
 
-    def __init__(self, workspace: Workspace, launcher: LaunchesAgents | None = None) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        launcher: LaunchesAgents | None = None,
+        *,
+        dev_mode: bool = False,
+        hot_reloader: Callable[[Workspace], None] | None = None,
+    ) -> None:
         super().__init__()
         self.workspace = workspace
         registry_path = Path.home() / ".config" / "ctlrm" / "registry.toml"
         self.launcher = launcher or AgentLauncher(SubprocessCommandRunner(), registry_path=registry_path)
         self._drag_state: DragState | None = None
+        self.dev_mode = dev_mode
+        self.hot_reloader = hot_reloader
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -141,6 +150,8 @@ class CtlrmApp(App[None]):
     def on_mount(self) -> None:
         self._sync_layout_extents()
         self._sync_active_panel_class()
+        if self.dev_mode:
+            self.bind("ctrl+r", "hot_reload", description="Hot reload")
 
     def on_mouse_move(self, event: events.MouseMove) -> None:
         if self._drag_state is None:
@@ -162,6 +173,13 @@ class CtlrmApp(App[None]):
 
     def action_focus_down(self) -> None:
         self._move_focus("down")
+
+    def action_hot_reload(self) -> None:
+        if not self.dev_mode or self.hot_reloader is None:
+            self.workspace.status = "Hot reload requires --dev"
+            return
+        self.workspace.status = "Hot reloading..."
+        self.hot_reloader(self.workspace)
 
     def launch_agent_from_request(self, request: AgentLaunchRequest) -> None:
         project = self.workspace.selected_project()

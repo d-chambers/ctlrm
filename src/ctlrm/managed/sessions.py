@@ -407,6 +407,12 @@ class SessionEngine:
             self.commit("request", {"id": request["id"], **result})
         if self.state["shutdown"]:
             return errors
+        if not self.state["paused"]:
+            try:
+                self.advance()
+            except (ValueError, OSError, RuntimeError) as error:
+                self.state = self.journal.replay()[0]
+                errors.append(f"workflow dispatch: {error}")
         for session in list(self.state["sessions"].values()):
             try:
                 if self.state["paused"] and session["status"] != "stopping":
@@ -420,6 +426,9 @@ class SessionEngine:
                 session.update(status="blocked", error=str(error))
                 self.commit("session-blocked", {"session_id": session["id"], "error": str(error)})
         return errors
+
+    def advance(self) -> None:
+        """Allow the workflow scheduler to commit assignments before terminal effects."""
 
     def _effects(self, session: dict) -> None:
         """Reconcile launches, readiness, delivery, and confirmed process death."""

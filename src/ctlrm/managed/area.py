@@ -196,6 +196,18 @@ class Area:
 
     def ensure_room(self) -> None:
         """Recover initialization from the complete immutable area definition."""
+        if self.data["mode"] == "workflow":
+            publish(self.room.root / "definition.yaml", self.data["definition"])
+            from ctlrm.runtime.room import _write_exclusive_atomic
+
+            task = self.data["definition"]["task"]
+            content = f"# {task['title']}\n\n{task['instructions']}\n"
+            path = self.room.root / "task.md"
+            try:
+                _write_exclusive_atomic(path, content)
+            except FileExistsError:
+                if path.read_text() != content:
+                    raise ValueError("conflicting immutable task snapshot")
         manifest = RoomManifest(
             id=self.data["room_id"],
             author="coordinator",
@@ -207,6 +219,12 @@ class Area:
                 for key, value in self.data["roles"].items()
             ],
         )
+        if self.room.room_path.exists():
+            existing = self.room.read_room()
+            if {a.participant: a.role for a in existing.assignments} == {
+                a.participant: a.role for a in manifest.assignments
+            }:
+                manifest.assignments = existing.assignments
         self.room.initialize(
             manifest,
             **self.data.get(

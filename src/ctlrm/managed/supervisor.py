@@ -97,7 +97,9 @@ def serve(area: Area, interval: float = 1) -> None:
         raise ValueError("supervisor interval must be between 0.1 and 60 seconds")
     with _writer(area):
         area.ensure_room()
-        engine = SessionEngine(area)
+        from ctlrm.managed.workflows import WorkflowEngine
+
+        engine = WorkflowEngine(area) if area.data["mode"] == "workflow" else SessionEngine(area)
         engine.state["shutdown"] = False
         engine.commit("supervisor-started")
         previous_errors = []

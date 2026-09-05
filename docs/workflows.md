@@ -1,0 +1,13 @@
+# Reusable workflows
+
+`ctlrm workflow validate --template workflow.yaml` validates a version 1 template. Templates define named profiles, roles, an entry step, explicit outcome transitions, and a bounded number of executions. `profiles` maps names to the provider profiles described in [managed sessions](managed-sessions.md). Human roles have no profile. A terminal destination is `terminal:completed`, `terminal:rejected`, or `terminal:failed`.
+
+Submit with `ctlrm --root WORKTREE workflow submit --template workflow.yaml --title "Task" --file task.md --request-id SUBMISSION_ID`. Every role defaults to a participant with the same name; repeated `--bind ROLE=PARTICIPANT` options may supply a complete alternative binding. Reusing a submission ID with identical inputs retries initialization. A different task requires another worktree. The template, profiles, task, and bindings are immutable snapshots; later changes to the source template cannot change the run.
+
+`workflow status` exposes run progress, execution history, session state, and diagnostics. Each assignment records an execution ID and exact acknowledgment/report commands. Agents and humans must acknowledge before acting and report an explicitly allowed outcome. Humans first accept their assigned role with `workflow join --participant NAME`. `workflow report` is also the human-response command. A rejected stale or unknown outcome remains visible in request history and cannot advance the task.
+
+Each review-loop visit has a new execution ID and carries the previous summary. Accepted transitions and assigned mailbox IDs survive supervisor restart; publication and terminal hints may repeat, while the logical assignment does not. Human approval is independent of provider tool permissions. Automatic role launching and artifact version checks are the next integration milestone.
+
+The coordination area is cooperative, writable by the same operating-system user. Role signatures validate workflow identity and intent; they do not authenticate a human against another process with the same filesystem access. Managed agent environments are prevented from calling human response operations as an accidental role crossing, but a malicious same-user process can remove that environment marker or alter files. Use a separately authenticated service for security-sensitive approvals; that is outside this local runtime.
+
+The event journal retains its initial snapshot and records subsequent state deltas, keeping old execution history and request results out of new record sizes. Replay supports the earlier full-snapshot event format. Immutable records remain bounded to 8 MiB each.

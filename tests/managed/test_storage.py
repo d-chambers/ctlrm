@@ -87,3 +87,37 @@ class TestRequestMetadataBounds:
         assert [request["id"] for request in requests] == ["valid"]
         assert "bounded ASCII" in errors[0]
         assert len(errors[0]) < 1000
+
+
+class TestGrowingHistory:
+    """Accepted history can grow without making each new event an oversized snapshot."""
+
+    def test_bounded_event_deltas(self, area, monkeypatch) -> None:
+        """Large prior executions and request results remain replayable after later commits."""
+        import ctlrm.managed.storage as storage
+
+        monkeypatch.setattr(storage, "MAX_RECORD_BYTES", 16000)
+        with area.journal.writer():
+            state = area.journal.replay()[0]
+            state["run"] = {"executions": []}
+            area.journal.commit(state, "start")
+            for index in range(20):
+                state["run"]["executions"].append({"id": str(index), "summary": "x" * 10000})
+                state["requests"][str(index)] = {"status": "accepted"}
+                area.journal.commit(state, "visit")
+            state["shutdown"] = True
+            area.journal.commit(state, "stop")
+            assert area.journal.replay()[0] == state
+        assert (
+            max(path.stat().st_size for path in (area.room.root / "events").glob("*.json")) < 16000
+        )
+
+    def test_removal_and_list_update(self, area) -> None:
+        """Replay supports replacement, nested edits, list truncation, and deleted fields."""
+        with area.journal.writer():
+            state = area.journal.replay()[0]
+            state["items"] = [{"old": True}, 1, 2]
+            area.journal.commit(state, "initial")
+            state["items"] = [{"new": True}, 4]
+            area.journal.commit(state, "changed")
+            assert area.journal.replay()[0] == state

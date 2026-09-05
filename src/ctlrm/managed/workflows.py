@@ -12,7 +12,7 @@ from ctlrm.managed.sessions import SessionEngine, SessionService, mailbox, messa
 from ctlrm.managed.storage import identifier, now, read_record
 from ctlrm.runtime.participants import validate_participant_id
 from ctlrm.runtime.paths import validate_path_component
-from ctlrm.runtime.workflows import StepExecution, Task, WorkflowRun, WorkflowTemplate
+from ctlrm.runtime.workflows import JobInput, TaskExecution, WorkflowRun, WorkflowTemplate
 from ctlrm.scheduler import transition
 
 
@@ -70,7 +70,7 @@ class WorkflowService(SessionService):
             area.validate()
             area.ensure_room()
         else:
-            task = Task(id=identifier("task"), title=title, instructions=instructions)
+            task = JobInput(id=identifier("job"), title=title, instructions=instructions)
             submission_id = request_id or identifier("request")
             definition = {
                 "template": snapshot,
@@ -142,12 +142,12 @@ class WorkflowEngine(SessionEngine):
             run.update(status="blocked", active=None, reason="step execution limit reached")
             return
         role = self.template.steps[destination].role
-        execution = StepExecution(
+        execution = TaskExecution(
             id=identifier("execution"),
-            step=destination,
+            task=destination,
             participant=self.definition["bindings"][role],
             input=incoming,
-        ).model_dump()
+        ).model_dump(by_alias=True)
         run["executions"].append(execution)
         run["active"] = execution["id"]
 
@@ -251,8 +251,8 @@ class WorkflowEngine(SessionEngine):
             if self.state.get("run"):
                 raise ValueError("workflow is already started")
             self.state["run"] = WorkflowRun(
-                id=self.definition["run_id"], task_id=self.definition["task"]["id"]
-            ).model_dump()
+                id=self.definition["run_id"], job_id=self.definition["task"]["id"]
+            ).model_dump(by_alias=True)
             self._visit(self.template.entry, {})
             return
         if kind in {"workflow-ack", "workflow-report"}:
@@ -347,7 +347,8 @@ class WorkflowEngine(SessionEngine):
                 arguments += f" --input-artifact {execution['input']['artifact']}"
             body = (
                 f"Area: {self.area.data['id']}\nRun: {run['id']}\nWork ID: {execution['id']}\n"
-                f"Role instructions: {role['instructions']}\nTask: .ctlrm/task.md\n"
+                f"Role instructions: {role['instructions']}\nJob goal: .ctlrm/task.md\n"
+                f"Task: {execution['step']}\nTask instructions: {self.template.tasks[execution['step']].instructions}\n"
                 f"Input: {json.dumps(execution['input'])}\n"
                 f"Input verification policy: all outcomes={self.template.steps[execution['step']].verify_input}; named outcomes={self.template.steps[execution['step']].verified_outcomes}\n"
                 f"Allowed outcomes: {', '.join(self.template.steps[execution['step']].transitions)}\n"

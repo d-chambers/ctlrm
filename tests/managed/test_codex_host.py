@@ -89,3 +89,45 @@ class TestRetryPendingInput:
         engine.tick()
         clock[0] += 16
         assert not loop.poll()
+
+
+class TestReadinessRetry:
+    """A finished bootstrap turn with no accepted readiness can be retried before timeout."""
+
+    def test_bootstrap_redelivery(self, area, monkeypatch) -> None:
+        """Transient startup rejection does not consume the bootstrap forever."""
+        import ctlrm.managed.codex_host as host
+        from ctlrm.managed.sessions import SessionEngine, SessionService
+        from conftest import FakeTerminal
+
+        with area.journal.writer():
+            engine = SessionEngine(area, FakeTerminal())
+            client = SessionService(area)
+            client.request("launch", {"participant": "agent"})
+            engine.tick()
+            current = next(iter(engine.state["sessions"].values()))
+            attempts = []
+
+            def turn(executable, arguments, native_id, prompt):
+                """Observe the redelivered bootstrap without inventing readiness."""
+                attempts.append(prompt)
+                return native_id
+
+            monkeypatch.setattr(host, "turn", turn)
+            clock = [100.0]
+            loop = host.InputLoop(
+                area.root,
+                current["id"],
+                1,
+                current["spec"]["token"],
+                {"executable": "codex", "arguments": [], "bootstrap": "read bootstrap"},
+                current["native_id"],
+                clock=lambda: clock[0],
+            )
+            assert not loop.poll()
+            clock[0] += 16
+            assert loop.poll() and attempts == ["read bootstrap"]
+            client.ready(current["id"], 1, current["native_id"])
+            engine.tick()
+            clock[0] += 16
+            assert not loop.poll()

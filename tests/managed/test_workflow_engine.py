@@ -24,13 +24,19 @@ def template(profile):
                 "owner": {"kind": "human"},
             },
             "steps": {
-                "implement": {"role": "implementer", "transitions": {"completed": "review"}},
+                "implement": {
+                    "role": "implementer",
+                    "verify_input": False,
+                    "transitions": {"completed": "review"},
+                },
                 "review": {
                     "role": "reviewer",
+                    "verify_input": True,
                     "transitions": {"approved": "approve", "changes_requested": "implement"},
                 },
                 "approve": {
                     "role": "owner",
+                    "verify_input": True,
                     "transitions": {
                         "approved": "terminal:completed",
                         "rejected": "terminal:rejected",
@@ -159,7 +165,11 @@ class TestWorkflow:
                 "profiles": {"test": profile.model_dump()},
                 "roles": {"worker": {"kind": "agent", "profile": "test"}},
                 "steps": {
-                    "work": {"role": "worker", "transitions": {"completed": "terminal:completed"}}
+                    "work": {
+                        "role": "worker",
+                        "verify_input": False,
+                        "transitions": {"completed": "terminal:completed"},
+                    }
                 },
             }
         )
@@ -367,6 +377,7 @@ class TestWorkflowCli:
                     "steps": {
                         "approve": {
                             "role": "owner",
+                            "verify_input": True,
                             "transitions": {"approved": "terminal:completed"},
                         }
                     },
@@ -687,3 +698,98 @@ class TestApprovalVersionRace:
                 client.area.room.root / "artifacts" / f"{accepted['artifact']}.json"
             )
             assert incoming["version"] == outgoing["version"]
+
+
+class TestReviewedWorkflowBoundaries:
+    """Timeouts, retry provenance, and custom approval names obey explicit workflow policy."""
+
+    def test_git_timeout_rejects_report(self, repository, template, monkeypatch) -> None:
+        """A slow Git status rejects the request while the supervisor continues ticking."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            payload = prepare(engine, client)
+            client.request("workflow-ack", payload)
+            engine.tick()
+            original = subprocess.run
+
+            def run(argv, *args, **kwargs):
+                """Inject a timeout into artifact dirty-state inspection only."""
+                if "status" in argv:
+                    raise subprocess.TimeoutExpired(argv, 15)
+                return original(argv, *args, **kwargs)
+
+            monkeypatch.setattr(subprocess, "run", run)
+            request = client.request(
+                "workflow-report", {**payload, "outcome": "completed", "summary": "Done"}
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "rejected"
+            assert "timed out" in engine.state["requests"][request]["error"]
+            assert engine.active()["id"] == payload["execution_id"]
+
+    def test_retry_attribution(self, repository, template) -> None:
+        """A recaptured tree references the retried execution, preserving prior provenance separately."""
+        from ctlrm.managed.storage import read_record
+
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            complete(engine, client, "completed")
+            payload = prepare(engine, client)
+            previous = engine.active()["input"]["execution_id"]
+            (repository / "source.txt").write_text("edited during review")
+            client.request("stop", {"session_id": payload["session_id"]})
+            engine.tick()
+            client.request(
+                "workflow-retry",
+                {"execution_id": payload["execution_id"], "reason": "Review the changed version"},
+            )
+            engine.tick()
+            incoming = engine.active()["input"]
+            record = read_record(
+                client.area.room.root / "artifacts" / f"{incoming['artifact']}.json"
+            )
+            assert incoming["execution_id"] == record["execution_id"] == payload["execution_id"]
+            assert incoming["previous_execution_id"] == previous
+
+    def test_custom_approval_checks_version(self, repository, template) -> None:
+        """Renaming an outcome leaves the step's explicit version policy intact."""
+        template.steps["review"].transitions = {"lgtm": "approve", "changes_requested": "implement"}
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            complete(engine, client, "completed")
+            payload = prepare(engine, client)
+            client.request("workflow-ack", payload)
+            engine.tick()
+            (repository / "source.txt").write_text("changed")
+            request = client.request(
+                "workflow-report", {**payload, "outcome": "lgtm", "summary": "Good"}
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "rejected"
+            assert "artifact changed" in engine.state["requests"][request]["error"]
+
+    def test_cancel_keeps_stopped_sessions(self, repository, template, monkeypatch) -> None:
+        """Repeated cancellation cannot revive retirement of an already confirmed stopped host."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            payload = prepare(engine, client)
+            client.request("stop", {"session_id": payload["session_id"]})
+            engine.tick()
+
+            def stop(*args):
+                """A retired host must not be inspected or killed again."""
+                raise AssertionError("stopped host was revisited")
+
+            monkeypatch.setattr(terminal, "stop", stop)
+            client.request("workflow-cancel", {})
+            engine.tick()
+            assert engine.state["run"]["status"] == "canceled"

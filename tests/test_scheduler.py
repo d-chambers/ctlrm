@@ -20,6 +20,7 @@ class TestTransition:
                 "steps": {
                     "review": {
                         "role": "owner",
+                        "verify_input": True,
                         "transitions": {"approved": "terminal:completed", "again": "review"},
                     }
                 },

@@ -12,7 +12,13 @@ HUMAN = {
     "entry": "approve",
     "profiles": {},
     "roles": {"owner": {"kind": "human"}},
-    "steps": {"approve": {"role": "owner", "transitions": {"approved": "terminal:completed"}}},
+    "steps": {
+        "approve": {
+            "role": "owner",
+            "verify_input": True,
+            "transitions": {"approved": "terminal:completed"},
+        }
+    },
 }
 
 
@@ -54,6 +60,24 @@ class TestTrapCycle:
         """A terminal on one branch cannot validate another branch that loops forever."""
         data = copy.deepcopy(HUMAN)
         data["steps"]["approve"]["transitions"]["retry"] = "trap"
-        data["steps"]["trap"] = {"role": "owner", "transitions": {"again": "trap"}}
+        data["steps"]["trap"] = {
+            "role": "owner",
+            "verify_input": True,
+            "transitions": {"again": "trap"},
+        }
         with pytest.raises(ValueError, match="every step"):
             WorkflowTemplate.model_validate(data)
+
+
+class TestExplicitVerificationPolicy:
+    """New template policy is explicit while earlier immutable snapshots retain their meaning."""
+
+    def test_policy_required(self) -> None:
+        """New source templates cannot silently infer review policy from an outcome name."""
+        data = copy.deepcopy(HUMAN)
+        del data["steps"]["approve"]["verify_input"]
+        with pytest.raises(ValueError, match="verify_input"):
+            WorkflowTemplate.model_validate(data)
+        legacy = WorkflowTemplate.from_snapshot(data)
+        assert legacy.steps["approve"].checks_input("approved")
+        assert not legacy.steps["approve"].checks_input("changes_requested")

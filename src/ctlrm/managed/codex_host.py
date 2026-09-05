@@ -64,7 +64,7 @@ class InputLoop:
         self.config = config
         self.native_id = native_id
         self.clock = clock
-        self.attempted = {}
+        self.attempted = {"bootstrap": self.clock()}
 
     def poll(self) -> bool:
         """Deliver only the currently pending logical hint; rejected acks remain retryable."""
@@ -75,24 +75,32 @@ class InputLoop:
         if session["generation"] != self.generation:
             raise ValueError("native runner generation is no longer current")
         outbound = pending_message(session)
-        if not outbound or self.clock() - self.attempted.get(outbound["id"], float("-inf")) < 15:
+        if not session["ready"] and session["status"] in {"starting", "spawning"}:
+            message_id = "bootstrap"
+            reference = self.config["bootstrap"]
+        else:
+            if not outbound:
+                return False
+            message_id = outbound["id"]
+            path = (
+                self.journal.root
+                / "sessions"
+                / self.session_id
+                / f"input-{self.generation}"
+                / f"{message_id}.json"
+            )
+            if not path.exists():
+                return False
+            record = read_record(path)
+            if record.get("token") != self.token or not isinstance(record.get("reference"), str):
+                raise ValueError("invalid native input hint")
+            reference = record["reference"]
+        if self.clock() - self.attempted.get(message_id, float("-inf")) < 15:
             return False
-        path = (
-            self.journal.root
-            / "sessions"
-            / self.session_id
-            / f"input-{self.generation}"
-            / f"{outbound['id']}.json"
-        )
-        if not path.exists():
-            return False
-        record = read_record(path)
-        if record.get("token") != self.token or not isinstance(record.get("reference"), str):
-            raise ValueError("invalid native input hint")
         self.native_id = turn(
-            self.config["executable"], self.config["arguments"], self.native_id, record["reference"]
+            self.config["executable"], self.config["arguments"], self.native_id, reference
         )
-        self.attempted[outbound["id"]] = self.clock()
+        self.attempted[message_id] = self.clock()
         return True
 
 

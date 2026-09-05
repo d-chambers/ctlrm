@@ -13,9 +13,12 @@ from ctlrm.runtime.room import RoomRuntime
 
 def git(root: Path, *args: str) -> str:
     """Run a bounded Git query without a shell."""
-    result = subprocess.run(
-        ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=15
-    )
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), *args], capture_output=True, text=True, timeout=15
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("Git query timed out; retry after resolving the slow operation") from error
     if result.returncode:
         raise ValueError(result.stderr.strip() or "not a Git worktree")
     return result.stdout.strip()

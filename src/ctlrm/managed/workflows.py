@@ -47,6 +47,14 @@ class WorkflowService(SessionService):
             area = Area.load(root)
             definition = area.data.get("definition") or {}
             expected = {"template": snapshot, "bindings": bindings}
+            normalized = (
+                {
+                    **definition,
+                    "template": WorkflowTemplate.from_snapshot(definition["template"]).model_dump(),
+                }
+                if "template" in definition
+                else definition
+            )
             if request_id is None:
                 raise ValueError(
                     f"area already exists; retry identical submission with --request-id {definition.get('submission_id', 'ORIGINAL_ID')}"
@@ -54,7 +62,7 @@ class WorkflowService(SessionService):
             if (
                 not request_id
                 or definition.get("submission_id") != request_id
-                or any(definition.get(k) != v for k, v in expected.items())
+                or any(normalized.get(k) != v for k, v in expected.items())
                 or definition.get("task", {}).get("title") != title
                 or definition.get("task", {}).get("instructions") != instructions
             ):
@@ -115,7 +123,7 @@ class WorkflowEngine(SessionEngine):
         """Load the immutable template; never reload the caller's mutable source file."""
         super().__init__(area, terminal, **kwargs)
         self.definition = area.data["definition"]
-        self.template = WorkflowTemplate.model_validate(self.definition["template"])
+        self.template = WorkflowTemplate.from_snapshot(self.definition["template"])
 
     def active(self) -> dict:
         """Select the current visit from committed run state."""
@@ -189,7 +197,8 @@ class WorkflowEngine(SessionEngine):
             raise ValueError("only unfinished workflows can be canceled")
         run.update(status="canceling", reason="waiting for owned providers to stop")
         for session in self.state["sessions"].values():
-            super().apply("stop", {"session_id": session["id"]})
+            if session["status"] not in {"stopped", "stopping"}:
+                super().apply("stop", {"session_id": session["id"]})
 
     def _retry(self, payload: dict) -> None:
         """Explicitly abandon one visit, refreshing its input artifact when requested."""
@@ -206,6 +215,13 @@ class WorkflowEngine(SessionEngine):
             raise ValueError("step execution limit reached; cancel or use a fresh worktree")
         incoming = {**execution["input"], "retry_of": execution["id"], "retry_reason": reason}
         if incoming.get("artifact"):
+            incoming.update(
+                previous_execution_id=incoming.get("execution_id"),
+                previous_artifact=incoming["artifact"],
+                execution_id=execution["id"],
+                outcome="retried",
+                summary=reason,
+            )
             incoming["artifact"] = capture(self.area, self.state["run"]["id"], execution["id"])
         execution["status"] = "abandoned"
         if session:
@@ -264,7 +280,9 @@ class WorkflowEngine(SessionEngine):
                 raise ValueError("outcome and a bounded summary are required")
             destination = transition(self.template, execution["step"], outcome)
             artifact = capture(self.area, self.state["run"]["id"], execution["id"])
-            if outcome == "approved" and execution["input"].get("artifact"):
+            if self.template.steps[execution["step"]].checks_input(outcome) and execution[
+                "input"
+            ].get("artifact"):
                 captured = read_record(self.area.room.root / "artifacts" / f"{artifact}.json")
                 verify(self.area, execution["input"]["artifact"], version=captured["version"])
             self.area.validate()
@@ -331,6 +349,7 @@ class WorkflowEngine(SessionEngine):
                 f"Area: {self.area.data['id']}\nRun: {run['id']}\nWork ID: {execution['id']}\n"
                 f"Role instructions: {role['instructions']}\nTask: .ctlrm/task.md\n"
                 f"Input: {json.dumps(execution['input'])}\n"
+                f"Input verification policy: all outcomes={self.template.steps[execution['step']].verify_input}; named outcomes={self.template.steps[execution['step']].verified_outcomes}\n"
                 f"Allowed outcomes: {', '.join(self.template.steps[execution['step']].transitions)}\n"
                 f"Before acting, run: {command} acknowledge {arguments}\n"
                 f"Report with: {command} report {arguments} --outcome OUTCOME --summary SUMMARY\n"

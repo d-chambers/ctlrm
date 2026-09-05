@@ -78,3 +78,20 @@ class TestExplicitVerificationPolicy:
         del data["tasks"]["approve"]["verify_input"]
         with pytest.raises(ValueError, match="verify_input"):
             WorkflowTemplate.model_validate(data)
+
+
+class TestExamples:
+    """The documented reusable YAML files must remain valid source templates."""
+
+    @pytest.mark.parametrize("name", ["ship", "single-agent", "implement-review"])
+    def test_source_template(self, name) -> None:
+        """Validate examples through the same strict parser used at submission."""
+        from pathlib import Path
+
+        path = Path(__file__).resolve().parents[2] / "examples" / f"{name}.yaml"
+        template = WorkflowTemplate.parse(path.read_text())
+        if name == "ship":
+            assert (
+                template.limits.max_specialist_executions
+                >= template.tasks["implement"].max_executions
+            )

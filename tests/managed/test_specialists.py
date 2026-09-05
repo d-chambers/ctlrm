@@ -307,3 +307,76 @@ class TestCompletedReviewProvenance:
             result = report(engine, client, "approved", specialist_reason=reason)
             assert result["status"] == "rejected"
             assert engine.active()["task"] == "review"
+
+
+class TestReviewFixRetries:
+    """Intentional mutation and required review limits have distinct retry behavior."""
+
+    def test_retry_partial_fix(self, repository, specialist_template) -> None:
+        """An approval superseded by findings cannot freeze the fix task's partial edits."""
+        specialist_template.tasks["fix"].max_executions = 2
+        client, _ = WorkflowService.submit(repository, specialist_template, "Goal", "Inspect")
+        client.join("owner")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            report(engine, client, "approved", specialists=["performance"], specialist_reason="x")
+            report(engine, client, "changes_requested")
+            (repository / "source.txt").write_text("partial fix\n")
+            request = client.request(
+                "workflow-retry", {"execution_id": engine.active()["id"], "reason": "Continue fix"}
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "accepted"
+            assert engine.active()["task"] == "fix"
+            assert report(engine, client, "completed")["status"] == "accepted"
+            assert engine.active()["task"] == "review"
+
+    def test_automatic_budget_blocks(self, repository, specialist_template) -> None:
+        """Required automatic reviews expose exhaustion as a blocked job with a reason."""
+        specialist_template.limits.max_specialist_executions = 1
+        specialist_template.tasks["review"].specialist_above_lines = {"performance": 0}
+        client, _ = WorkflowService.submit(repository, specialist_template, "Goal", "Inspect")
+        client.join("owner")
+        (repository / "source.txt").write_text("large enough\n")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            report(engine, client, "approved")
+            report(engine, client, "changes_requested")
+            report(engine, client, "completed")
+            assert report(engine, client, "approved")["status"] == "accepted"
+            assert engine.state["run"]["status"] == "blocked"
+            assert engine.state["run"]["reason"] == "specialist execution limit reached"
+
+    @pytest.mark.parametrize(
+        "defect", ["pr", "duplicates", "negative", "unlisted", "optional_fix", "no_approval"]
+    )
+    def test_policy_boundaries(self, specialist_template, defect) -> None:
+        """Reject malformed policies that could bypass declared graph or review bounds."""
+        data = specialist_template.model_dump()
+        review = data["tasks"]["review"]
+        if defect == "pr":
+            review["requires_pr"] = ["missing"]
+        elif defect == "duplicates":
+            review["specialist_tasks"] = ["performance", "performance"]
+        elif defect == "negative":
+            review["specialist_above_lines"] = {"performance": -1}
+        elif defect == "unlisted":
+            review["specialist_above_lines"] = {"missing": 10}
+        elif defect == "optional_fix":
+            data["tasks"]["performance"]["transitions"]["changes_requested"] = "concurrency"
+        else:
+            review["transitions"] = {"completed": "finish"}
+        with pytest.raises(ValueError):
+            WorkflowTemplate.model_validate(data)
+
+    @pytest.mark.parametrize(
+        "payload", [{"specialists": "performance"}, {"specialists": ["performance"]}]
+    )
+    def test_request_boundaries(self, repository, specialist_template, payload) -> None:
+        """Specialist requests require a typed list and an explicit nonblank reason."""
+        client, _ = WorkflowService.submit(repository, specialist_template, "Goal", "Inspect")
+        client.join("owner")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            assert report(engine, client, "approved", **payload)["status"] == "rejected"
+            assert engine.active()["task"] == "review"

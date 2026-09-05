@@ -102,7 +102,7 @@ class WorkflowTemplate(Record):
                 raise ValueError(f"unknown profile: {role.profile}")
         if self.entry not in self.tasks or self.tasks[self.entry].optional:
             raise ValueError("unknown entry task")
-        for name, task in self.tasks.items():
+        for task in self.tasks.values():
             if (
                 len(set(task.requires_pr)) != len(task.requires_pr)
                 or set(task.requires_pr) - task.transitions.keys()

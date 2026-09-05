@@ -207,6 +207,9 @@ class WorkflowEngine(SessionEngine):
             raise ValueError("specialist reason must be nonblank and at most 4096 characters")
         if selected and (outcome != "approved" or reason is None):
             raise ValueError("specialist requests require an approved outcome and a bounded reason")
+        used = sum(self.template.tasks[e["task"]].optional for e in self.state["run"]["executions"])
+        if used + len(selected) > self.template.limits.max_specialist_executions:
+            raise ValueError("specialist execution limit reached")
         if outcome != "approved":
             return []
         selected = list(selected)
@@ -223,9 +226,6 @@ class WorkflowEngine(SessionEngine):
                 for name, threshold in task.specialist_above_lines.items()
                 if lines > threshold and name not in selected
             )
-        used = sum(self.template.tasks[e["task"]].optional for e in self.state["run"]["executions"])
-        if used + len(selected) > self.template.limits.max_specialist_executions:
-            raise ValueError("specialist execution limit reached")
         return selected
 
     def _route_report(
@@ -242,7 +242,6 @@ class WorkflowEngine(SessionEngine):
             if not context:
                 raise ValueError("specialist task has no recorded continuation")
             reviews = [*context.get("reviews", []), incoming.copy()]
-            incoming["reviews"] = reviews
             if execution["outcome"] == "approved":
                 pending = context["pending"]
                 destination = pending[0] if pending else context["destination"]
@@ -252,6 +251,8 @@ class WorkflowEngine(SessionEngine):
                         "pending": pending[1:],
                         "reviews": reviews,
                     }
+            if "specialist_context" not in incoming:
+                incoming["reviews"] = reviews
             # Findings route through the task's declared fix destination; remaining reviews are superseded.
         elif specialists:
             incoming["specialist_context"] = {
@@ -348,7 +349,10 @@ class WorkflowEngine(SessionEngine):
                     ]
                     incoming["invalidated_specialist_context"] = incoming.pop("specialist_context")
                     incoming.pop("reviews", None)
-                elif any(
+                elif (
+                    self.template.tasks[destination].verify_input
+                    or self.template.tasks[destination].verified_outcomes
+                ) and any(
                     prior["outcome"] == "approved"
                     and self.template.tasks[prior["task"]].checks_input("approved")
                     and read_record(

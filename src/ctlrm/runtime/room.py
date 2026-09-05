@@ -19,6 +19,17 @@ _FILE_MODE = 0o660
 _UNSUPPORTED_LINK_ERRNOS = {errno.EPERM, errno.EXDEV, errno.EOPNOTSUPP}
 
 
+def _mkdir_shared(path: Path) -> None:
+    """Set group permissions only on a directory created by this process."""
+    try:
+        path.mkdir(mode=_DIRECTORY_MODE, parents=True)
+    except FileExistsError:
+        if not path.is_dir():
+            raise NotADirectoryError(str(path))
+    else:
+        path.chmod(_DIRECTORY_MODE)
+
+
 def _write_exclusive_atomic(path: Path, text: str) -> None:
     """Atomically create a file without replacing an existing owner."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -66,17 +77,16 @@ class RoomRuntime(ProjectRuntime):
 
     def init_project(self) -> None:
         """Create the minimal room directories for a shared Unix group."""
-        (self.root / "participants").mkdir(parents=True, exist_ok=True)
-        (self.root / "participants").chmod(_DIRECTORY_MODE)
-        self.root.chmod(_DIRECTORY_MODE)
+        _mkdir_shared(self.root)
+        _mkdir_shared(self.root / "participants")
 
     def init_participant(self, participant_id: str) -> None:
         """Create the inbox directory for one safe participant identifier."""
         validate_participant_id(participant_id)
         inbox = self.root / "participants" / participant_id / "inbox"
-        inbox.mkdir(parents=True, exist_ok=True)
-        inbox.chmod(_DIRECTORY_MODE)
-        inbox.parent.chmod(_DIRECTORY_MODE)
+        self.init_project()
+        _mkdir_shared(inbox.parent)
+        _mkdir_shared(inbox)
 
     @property
     def room_path(self) -> Path:

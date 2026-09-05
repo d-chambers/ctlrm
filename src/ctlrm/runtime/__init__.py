@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from ctlrm.runtime.paths import validate_path_component
+from ctlrm.runtime.participants import validate_participant_id
 
 
 class ProjectRuntime:
@@ -21,7 +21,7 @@ class ProjectRuntime:
 
     def init_participant(self, participant_id: str) -> None:
         """Create runtime directories for one participant."""
-        validate_path_component(participant_id, label="participant id", max_length=64)
+        validate_participant_id(participant_id)
         participant_root = self.root / "participants" / participant_id
         (participant_root / "inbox").mkdir(parents=True, exist_ok=True)
         (participant_root / "outbox").mkdir(parents=True, exist_ok=True)

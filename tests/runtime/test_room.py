@@ -500,3 +500,32 @@ class TestYamlBoundaries:
         text = room().to_markdown().replace("id: room-test", "id: room-test\nyes: ignored")
         with pytest.raises(ValueError, match="keys must be strings"):
             RoomManifest.parse(text)
+
+
+class TestSharedRoomOwnership:
+    """Joining must work with shared writable directories owned by another user."""
+
+    def test_existing_directories_are_not_chmodded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Group membership allows creation, not chmod of the author's directories."""
+        runtime = RoomRuntime(tmp_path)
+        initialize(runtime)
+        shared = {runtime.root, runtime.root / "participants"}
+        original = Path.chmod
+
+        def chmod(path: Path, mode: int, *, follow_symlinks: bool = True) -> None:
+            """Simulate Unix ownership on the author's shared directories."""
+            if path in shared:
+                raise PermissionError("not the directory owner")
+            original(path, mode, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(Path, "chmod", chmod)
+        join_reviewer(runtime)
+        assert runtime.read_signature("reviewer").role == "review"
+
+    @pytest.mark.parametrize("identifier", ["alice.yaml", "alice.YAML"])
+    def test_reserved_signature_suffix(self, identifier: str) -> None:
+        """Participant directories must not collide with signature filenames."""
+        with pytest.raises(ValueError, match="reserved .yaml"):
+            RoleAssignment(participant=identifier, role="review")

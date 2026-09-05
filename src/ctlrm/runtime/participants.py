@@ -16,6 +16,8 @@ from ctlrm.runtime.documents import normalize_timestamp
 
 def validate_participant_id(value: str) -> str:
     """Return a participant id that is safe to use as one path component."""
+    if value.lower().endswith(".yaml"):
+        raise ValueError("participant id must not use the reserved .yaml suffix")
     return validate_path_component(value, label="participant id", max_length=64)
 
 

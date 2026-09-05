@@ -111,3 +111,14 @@ class TestTaskTerminology:
         run = WorkflowRun.model_validate({"id": "r1", "task_id": "old-job"})
         assert run.job_id == "old-job"
         assert run.model_dump(by_alias=True)["task_id"] == "old-job"
+
+
+class TestLegacyDefault:
+    """Identical pre-upgrade sources retain their submission identity."""
+
+    def test_unversioned_template(self) -> None:
+        """Omitted schema versions still mean v1 for idempotent submission retries."""
+        data = copy.deepcopy(HUMAN)
+        del data["schema_version"]
+        legacy = WorkflowTemplate.from_snapshot(HUMAN)
+        assert WorkflowTemplate.model_validate(data).model_dump() == legacy.model_dump()

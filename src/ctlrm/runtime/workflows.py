@@ -66,7 +66,7 @@ class ExecutionLimits(Record):
 class WorkflowTemplate(Record):
     """A validated graph independent of mutable participants and run state."""
 
-    schema_version: Literal[1, 2] = 2
+    schema_version: Literal[1, 2] = 1
     name: str
     entry: str
     limits: ExecutionLimits = Field(default_factory=ExecutionLimits)

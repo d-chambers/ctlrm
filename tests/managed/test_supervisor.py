@@ -52,3 +52,24 @@ class TestDetachedSupervisor:
                 client.request("supervisor-stop", {})
                 wait_for(lambda: not running(area))
             terminal.server.cmd("kill-server")
+
+
+class TestLockProbe:
+    """Liveness probes observe kernel state without temporarily becoming the writer."""
+
+    def test_probe_does_not_change_lock(self, area) -> None:
+        """A status reader neither changes lock metadata nor contends for acquisition."""
+        with area.journal.writer():
+            path = area.room.root / "supervisor/lock"
+            original = path.stat()
+            content = path.read_bytes()
+            for _ in range(10):
+                assert running(area)
+            assert path.stat().st_mtime_ns == original.st_mtime_ns
+            assert path.read_bytes() == content
+        assert not running(area)
+
+    def test_initializer_is_not_supervisor(self, area) -> None:
+        """A short initialization lock must not masquerade as a running daemon."""
+        with area.journal.writer(purpose="initialize"):
+            assert not running(area)

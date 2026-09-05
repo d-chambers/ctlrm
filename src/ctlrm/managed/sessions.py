@@ -6,7 +6,7 @@ import sys
 import time
 from uuid import UUID
 
-from ctlrm.communication.terminal import Terminal, TmuxTerminal
+from ctlrm.communication.terminal import StopPending, Terminal, TmuxTerminal
 from ctlrm.managed.area import Area
 from ctlrm.managed.providers import ProviderProfile
 from ctlrm.managed.storage import identifier, now, publish, read_record
@@ -287,6 +287,7 @@ class SessionEngine:
             session.update(
                 native_id=record["native_id"],
                 recovery=record,
+                recoveries=0,
                 ready=True,
                 status="reconciling" if session["recovering"] else "ready",
                 error=None,
@@ -372,10 +373,7 @@ class SessionEngine:
                 and self.terminal.health(session["spec"], session["identity"]) == "running"
             ):
                 raise ValueError("stop the live session before resume or replacement")
-            if session.get("identity"):
-                self.terminal.stop(session["spec"], session["identity"])
-            session["recoveries"] = 0
-            self._new_generation(session, resume=kind == "resume")
+            self._plan_restart(session, resume=kind == "resume", reset_counter=True)
             return
         raise ValueError(f"unknown request kind: {kind}")
 
@@ -414,6 +412,10 @@ class SessionEngine:
                 if self.state["paused"] and session["status"] != "stopping":
                     continue
                 self._effects(session)
+            except StopPending as error:
+                if session.get("error") != str(error):
+                    session["error"] = str(error)
+                    self.commit("terminal-stop-pending", {"session_id": session["id"]})
             except (ValueError, OSError, RuntimeError) as error:
                 session.update(status="blocked", error=str(error))
                 self.commit("session-blocked", {"session_id": session["id"], "error": str(error)})
@@ -425,6 +427,13 @@ class SessionEngine:
         profile = ProviderProfile.model_validate(session["profile"])
         spec = session["spec"]
         if status == "planned":
+            retiring = session.get("retiring")
+            if retiring:
+                if retiring["identity"]:
+                    self.terminal.stop(retiring["spec"], retiring["identity"])
+                session.pop("retiring")
+                session["error"] = None
+                self.commit("terminal-retired", {"session_id": session["id"]})
             if self.terminal.exists(spec):
                 raise ValueError("terminal name occupied before launch; refusing adoption")
             publish(
@@ -441,6 +450,7 @@ class SessionEngine:
         if status == "spawning":
             session["identity"] = self.terminal.ensure(spec)
             session["status"] = "starting"
+            session["created"] = self.clock()
             self.commit("terminal-created", {"session_id": session["id"]})
             return
         if status == "stopping":
@@ -449,7 +459,7 @@ class SessionEngine:
                 self.commit("stop-identity-reconciled", {"session_id": session["id"]})
             if session.get("identity"):
                 self.terminal.stop(spec, session["identity"])
-            session.update(status="stopped", ready=False)
+            session.update(status="stopped", ready=False, error=None)
             self.commit("session-stopped", {"session_id": session["id"]})
             return
         if status in {"blocked", "stopped"}:
@@ -457,9 +467,7 @@ class SessionEngine:
         if status == "backoff":
             if self.clock() < session["retry_at"]:
                 return
-            if session.get("identity"):
-                self.terminal.stop(spec, session["identity"])
-            self._new_generation(session, resume=True)
+            self._plan_restart(session, resume=True)
             self.commit("native-resume", {"session_id": session["id"]})
             return
         health = self.terminal.health(spec, session["identity"])
@@ -470,7 +478,7 @@ class SessionEngine:
             raise ValueError(
                 "readiness timeout: inspect the terminal for trust, permission, or bootstrap errors"
             )
-        if health != "running" and (session["ready"] or self.clock() - session["created"] > 2):
+        if health in {"exited", "missing"}:
             self._schedule_recovery(session, profile)
             return
         if session["ready"]:
@@ -496,8 +504,11 @@ class SessionEngine:
                             reference(session["participant"], outbound["id"]),
                         )
                     except (ValueError, RuntimeError):
-                        if self.terminal.health(spec, session["identity"]) == "running":
+                        current_health = self.terminal.health(spec, session["identity"])
+                        if current_health == "running":
                             raise
+                        if current_health == "starting":
+                            return
                         self._schedule_recovery(session, profile)
                         return
                     self.woken[key] = self.clock()
@@ -515,3 +526,14 @@ class SessionEngine:
             retry_at=self.clock() + profile.backoff * session["recoveries"],
         )
         self.commit("provider-exited", {"session_id": session["id"]})
+
+    def _plan_restart(self, session: dict, *, resume: bool, reset_counter: bool = False) -> None:
+        """Validate and commit replacement intent before retiring the previous terminal."""
+        retiring = {"spec": session["spec"], "identity": session.get("identity")}
+        prepared = copy.deepcopy(session)
+        if reset_counter:
+            prepared["recoveries"] = 0
+        self._new_generation(prepared, resume=resume)
+        prepared["retiring"] = retiring
+        session.clear()
+        session.update(prepared)

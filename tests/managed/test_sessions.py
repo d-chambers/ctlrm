@@ -235,3 +235,74 @@ class TestReadyAfterLaunchCrash:
             assert restarted.state["requests"][request]["status"] == "accepted"
             assert session(restarted)["ready"]
             assert terminal.launches == 1
+
+
+class TestRetirementAndStartup:
+    """Slow process boundaries stay retryable and never violate committed intent."""
+
+    def test_stop_pending_retries(self, managed, monkeypatch) -> None:
+        """An accepted stop remains stopping until the signaled host is gone."""
+        from ctlrm.communication.terminal import StopPending
+
+        area, engine, terminal, client = managed
+        current = session(engine)
+        original = terminal.stop
+        attempts = []
+
+        def stop(spec, identity):
+            """Delay the first stop confirmation only."""
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise StopPending("waiting for process exit")
+            original(spec, identity)
+
+        monkeypatch.setattr(terminal, "stop", stop)
+        client.request("stop", {"session_id": current["id"]})
+        engine.tick()
+        assert session(engine)["status"] == "stopping"
+        engine.tick()
+        assert session(engine)["status"] == "stopped"
+        assert session(engine)["error"] is None
+
+    def test_slow_start_is_not_death(self, area) -> None:
+        """No child yet is distinct from an observed provider exit."""
+        terminal = FakeTerminal()
+        clock = [100.0]
+        with area.journal.writer():
+            engine = SessionEngine(area, terminal, clock=lambda: clock[0])
+            SessionService(area).request("launch", {"participant": "agent"})
+            engine.tick()
+            current = session(engine)
+            terminal.terminals[current["spec"]["terminal_name"]]["health"] = "starting"
+            clock[0] += 5
+            engine.tick()
+            assert session(engine)["status"] == "starting"
+            assert session(engine)["recoveries"] == 0
+
+    def test_failed_restart_validation_keeps_terminal(self, managed, monkeypatch) -> None:
+        """A profile/environment validation failure cannot execute a terminal kill."""
+        from ctlrm.managed.providers import ProviderProfile
+
+        area, engine, terminal, client = managed
+        current = session(engine)
+        terminal.terminals[current["spec"]["terminal_name"]]["health"] = "exited"
+
+        def checked(self):
+            """Simulate changed environment at the restart validation boundary."""
+            raise ValueError("provider context changed")
+
+        monkeypatch.setattr(ProviderProfile, "checked", checked)
+        with pytest.raises(ValueError, match="context changed"):
+            engine.apply("replace", {"session_id": current["id"]})
+        assert terminal.exists(current["spec"])
+        assert session(engine)["generation"] == 1
+
+    def test_success_resets_retry_budget(self, managed) -> None:
+        """Acknowledged recovery starts a new consecutive-failure budget."""
+        area, engine, terminal, client = managed
+        current = session(engine)
+        current["recoveries"] = 2
+        engine.commit("test-previous-retries")
+        client.ready(current["id"], current["generation"], current["native_id"])
+        engine.tick()
+        assert session(engine)["recoveries"] == 0

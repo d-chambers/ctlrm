@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import libtmux
+
+from ctlrm.communication.terminal import _translate_errors
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -80,6 +82,7 @@ class CommandRunner(Protocol):
 class SubprocessCommandRunner:
     """Legacy command interface backed by libtmux; managed sessions use TmuxTerminal."""
 
+    @_translate_errors
     def run(self, command: TmuxCommand) -> str:
         """Execute a tmux command and return stdout."""
         if command.program != "tmux":

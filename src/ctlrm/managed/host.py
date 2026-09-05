@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from ctlrm.managed.storage import read_record
+from ctlrm.managed.storage import publish, read_record
 
 
 def main() -> None:
@@ -20,6 +20,10 @@ def main() -> None:
     environment = os.environ.copy()
     environment.update(CTLRM_ROOT=root, CTLRM_SESSION=session_id, CTLRM_GENERATION=generation)
     result = subprocess.run(launch["argv"], env=environment)
+    publish(
+        path.parent / f"exit-{generation}.json",
+        {"token": launch["token"], "returncode": result.returncode},
+    )
     print(
         f"\n[ctlrm provider exited with status {result.returncode}; host remains for inspection]",
         flush=True,

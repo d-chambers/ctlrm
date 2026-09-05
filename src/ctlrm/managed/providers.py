@@ -50,7 +50,17 @@ class ProviderProfile(BaseModel):
             )
             if sum(value.split("=", 1)[0] in names for value in self.arguments) != 1:
                 raise ValueError("automatic input requires exactly one explicit permission policy")
-            pairs = dict(zip(self.arguments, self.arguments[1:]))
+            pairs = {}
+            for index, value in enumerate(self.arguments):
+                key, separator, inline = value.partition("=")
+                if key in names:
+                    pairs[key] = (
+                        inline
+                        if separator
+                        else (
+                            self.arguments[index + 1] if index + 1 < len(self.arguments) else None
+                        )
+                    )
             if self.provider == "claude" and pairs.get("--permission-mode") != "dontAsk":
                 raise ValueError("automatic Claude input requires --permission-mode dontAsk")
             if (

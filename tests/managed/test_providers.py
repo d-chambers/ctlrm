@@ -85,3 +85,22 @@ class TestAutomaticInputPolicy:
                 arguments=["--ask-for-approval", "never", "-a", "on-request"],
                 input_mode="unattended",
             )
+
+
+class TestPermissionEqualsForm:
+    """Valid native CLI inline values are parsed consistently with split values."""
+
+    @pytest.mark.parametrize(
+        "provider,argument",
+        [("claude", "--permission-mode=dontAsk"), ("codex", "--ask-for-approval=never")],
+    )
+    def test_equals_form(self, tmp_path: Path, provider: str, argument: str) -> None:
+        """The policy guard accepts native argument syntax without weakening its checks."""
+        profile = ProviderProfile(
+            provider=provider,
+            executable=sys.executable,
+            context=str(tmp_path),
+            arguments=[argument],
+            input_mode="unattended",
+        )
+        assert profile.input_mode == "unattended"

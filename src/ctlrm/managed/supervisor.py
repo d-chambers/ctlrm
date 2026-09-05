@@ -1,6 +1,8 @@
 """A detached single-writer supervisor whose lifetime is independent of CLI/TUI."""
 
 import argparse
+from contextlib import contextmanager
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -8,16 +10,51 @@ import time
 
 from ctlrm.managed.area import Area
 from ctlrm.managed.sessions import SessionEngine
+from ctlrm.managed.storage import read_record
 from ctlrm.runtime.filesystem import mkdir_shared
 
 
 def running(area: Area) -> bool:
     """Check the persistent lock instead of trusting a stale PID file."""
+    path = area.room.root / "supervisor/lock"
     try:
-        with area.journal.writer():
+        info = path.stat()
+        owner = read_record(path)
+        if owner.get("purpose") != "supervisor":
             return False
-    except RuntimeError:
-        return True
+        for line in Path("/proc/locks").read_text().splitlines():
+            fields = line.split()
+            if len(fields) < 6 or fields[1] != "FLOCK" or fields[4] != str(owner.get("pid")):
+                continue
+            major, minor, inode = fields[5].split(":")
+            if (int(major, 16), int(minor, 16), int(inode)) == (
+                os.major(info.st_dev),
+                os.minor(info.st_dev),
+                info.st_ino,
+            ):
+                return True
+    except (FileNotFoundError, ValueError):
+        return False
+    return False
+
+
+@contextmanager
+def _writer(area: Area):
+    """Allow startup races with a brief initializer or another starting daemon."""
+    deadline = time.monotonic() + 5
+    while True:
+        lock = area.journal.writer()
+        try:
+            lock.__enter__()
+            break
+        except RuntimeError:
+            if running(area) or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        lock.__exit__(None, None, None)
 
 
 def start(area: Area, interval: float = 1) -> None:
@@ -58,7 +95,7 @@ def serve(area: Area, interval: float = 1) -> None:
     """Replay committed state and poll requests/processes while holding one lock."""
     if not 0.1 <= interval <= 60:
         raise ValueError("supervisor interval must be between 0.1 and 60 seconds")
-    with area.journal.writer():
+    with _writer(area):
         area.ensure_room()
         engine = SessionEngine(area)
         engine.state["shutdown"] = False

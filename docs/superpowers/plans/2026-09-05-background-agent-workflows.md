@@ -176,11 +176,13 @@ Acceptance: the retained CLI/package imports and checks pass; persistence preser
 
 ### 2. Manage single-agent sessions in worktrees
 
-- [ ] Implement worktree/branch validation, immutable area identity, namespace isolation, ignore handling, and explicit legacy adoption rules.
-- [ ] Add libtmux with a tested dependency range. Replace `communication/tmux.py` internals with the terminal adapter; test literal/multiline prompts and real pane ownership instead of old argv construction.
-- [ ] Extend `agents/launcher.py` with the proven provider/bootstrap adapter, launch intent, readiness, and recovery revisions.
-- [ ] Implement the singleton supervisor, request spool, committed events, replay, logs, and standalone session lifecycle operations.
-- [ ] Add native recovery, status reconciliation, explicit stop/resume/replacement, and minimal crash/replay tests as these components land.
+- [x] Implement worktree/branch validation, immutable area identity, namespace isolation, ignore handling, and explicit legacy adoption rules.
+- [x] Add libtmux with a tested dependency range. Replace `communication/tmux.py` internals with the terminal adapter; test literal/multiline prompts and real pane ownership instead of old argv construction.
+- [x] Extend `agents/launcher.py` with the proven provider/bootstrap adapter, launch intent, readiness, and recovery revisions.
+- [x] Implement the singleton supervisor, request spool, committed events, replay, logs, and standalone session lifecycle operations.
+- [x] Add native recovery, status reconciliation, explicit stop/resume/replacement, and minimal crash/replay tests as these components land.
+
+Measured acceptance is recorded in `docs/managed-sessions.md` and `docs/evidence/managed-native-recovery-2026-09-05.json`. The runtime initially targets Linux process identity APIs. Provider defaults are preserved: automatic terminal input requires an explicitly configured unattended profile; interactive profiles keep prompts in the durable mailbox for manual delivery. Interactive attach uses the native tmux client with inherited I/O after libtmux ownership verification because libtmux 0.62 captures attach output.
 
 Acceptance: a single agent needs no task/graph, survives UI closure, and resumes its native session after death. Explicit stop does not trigger restart. Separate worktrees of one repository operate independently. A second supervisor or a crash between spawn and commit cannot create a duplicate managed session.
 

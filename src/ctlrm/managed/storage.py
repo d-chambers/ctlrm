@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Iterator
 from uuid import uuid4
@@ -92,7 +93,7 @@ class Journal:
         self.locked = False
 
     @contextmanager
-    def writer(self) -> Iterator[None]:
+    def writer(self, purpose: str = "supervisor") -> Iterator[None]:
         """Hold the persistent supervisor lock; never replace its inode."""
         mkdir_shared(self.root / "supervisor")
         with (self.root / "supervisor/lock").open("a+") as stream:
@@ -100,6 +101,10 @@ class Journal:
                 fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise RuntimeError("this worktree already has a supervisor") from error
+            stream.seek(0)
+            stream.truncate()
+            stream.write(encoded({"pid": os.getpid(), "purpose": purpose}))
+            stream.flush()
             self.locked = True
             try:
                 yield

@@ -126,7 +126,7 @@ class Area:
         reused = existing()
         if reused is not None:
             return reused
-        with journal.writer():
+        with journal.writer(purpose="initialize"):
             reused = existing()
             if reused is not None:
                 return reused

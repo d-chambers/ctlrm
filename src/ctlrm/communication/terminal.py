@@ -1,7 +1,10 @@
 """Owned terminal management through libtmux, with process identity checks."""
 
 from pathlib import Path
+from functools import wraps
 import os
+import shutil
+import subprocess
 import shlex
 import signal
 import time
@@ -9,6 +12,26 @@ import sys
 from typing import Protocol
 
 import libtmux
+
+from ctlrm.managed.storage import read_record
+
+
+class StopPending(RuntimeError):
+    """An owned process has been signaled but has not exited yet."""
+
+
+def _translate_errors(method):
+    """Keep library-specific exceptions inside the terminal adapter."""
+
+    @wraps(method)
+    def call(*args, **kwargs):
+        """Translate a failed tmux operation into the service error contract."""
+        try:
+            return method(*args, **kwargs)
+        except libtmux.exc.LibTmuxException as error:
+            raise RuntimeError(f"tmux operation failed: {error}") from error
+
+    return call
 
 
 def process_identity(pid: int) -> str | None:
@@ -72,6 +95,7 @@ class TmuxTerminal:
         """Find one exact session name without selecting user terminals."""
         return self.server.sessions.get(session_name=spec["terminal_name"], default=None)
 
+    @_translate_errors
     def exists(self, spec: dict) -> bool:
         """Return whether this generation's terminal name is occupied."""
         return self._session(spec) is not None
@@ -118,6 +142,7 @@ class TmuxTerminal:
             "session": session.session_id,
         }
 
+    @_translate_errors
     def ensure(self, spec: dict) -> dict:
         """Create a stable host or adopt only an exact creation-time identity match."""
         session = self._session(spec)
@@ -152,6 +177,7 @@ class TmuxTerminal:
         session.set_option("@ctlrm-generation", str(spec["generation"]))
         return identity
 
+    @_translate_errors
     def adopt(self, spec: dict) -> dict:
         """Reconcile an existing launch without starting a process on a race."""
         session = self._session(spec)
@@ -168,13 +194,24 @@ class TmuxTerminal:
             raise ValueError("terminal identity changed; refusing to adopt or stop it")
         return session
 
+    @_translate_errors
     def health(self, spec: dict, identity: dict) -> str:
         """A live host with no provider child is an exited agent, not a healthy pane."""
         session = self._verified(spec, identity)
         if session is None:
             return "missing"
-        return "running" if children(identity["host_pid"]) else "exited"
+        if children(identity["host_pid"]):
+            return "running"
+        exit_path = (
+            Path(spec["root"]) / ".ctlrm/sessions" / spec["id"] / f"exit-{spec['generation']}.json"
+        )
+        if exit_path.exists():
+            if read_record(exit_path).get("token") != spec["token"]:
+                raise ValueError("provider exit observation has a mismatched launch token")
+            return "exited"
+        return "starting"
 
+    @_translate_errors
     def wake(self, spec: dict, identity: dict, reference: str) -> None:
         """Type only a bounded ASCII reference, never a user's multiline prompt."""
         if (
@@ -189,6 +226,7 @@ class TmuxTerminal:
             raise ValueError("provider is not running")
         session.panes[0].send_keys(reference, literal=True)
 
+    @_translate_errors
     def stop(self, spec: dict, identity: dict) -> None:
         """Kill only the verified dedicated session, propagating terminal hangup."""
         session = self._verified(spec, identity)
@@ -203,8 +241,9 @@ class TmuxTerminal:
             while process_identity(host_pid) == identity["host"] and time.monotonic() < deadline:
                 time.sleep(0.02)
         if process_identity(identity["host_pid"]) == identity["host"]:
-            raise RuntimeError("terminal stop is pending; host process still exists")
+            raise StopPending("terminal stop is pending; host process still exists")
 
+    @_translate_errors
     def capture(self, spec: dict, identity: dict) -> str:
         """Capture bounded recent output from a verified owned terminal."""
         session = self._verified(spec, identity)
@@ -212,9 +251,19 @@ class TmuxTerminal:
             return "[terminal is missing]"
         return "\n".join(session.panes[0].capture_pane(start=-200) or [])
 
+    @_translate_errors
     def attach(self, spec: dict, identity: dict) -> None:
         """Attach the interactive client through libtmux to a verified session."""
         session = self._verified(spec, identity)
         if session is None:
             raise ValueError("terminal is missing")
-        session.attach()
+        # libtmux 0.62 captures stdout/stderr, which prevents interactive attachment.
+        # Lifecycle and target verification remain library-owned; this is the native UI client.
+        binary = self.server.tmux_bin or shutil.which("tmux")
+        if not binary:
+            raise RuntimeError("tmux executable is missing")
+        result = subprocess.run(
+            [binary, "-S", identity["socket_path"], "attach-session", "-t", session.session_id]
+        )
+        if result.returncode:
+            raise RuntimeError(f"interactive tmux client exited with status {result.returncode}")

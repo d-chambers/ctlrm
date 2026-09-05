@@ -426,7 +426,7 @@ class SessionEngine:
         status = session["status"]
         profile = ProviderProfile.model_validate(session["profile"])
         spec = session["spec"]
-        if status == "planned":
+        if status in {"planned", "stopping"}:
             retiring = session.get("retiring")
             if retiring:
                 if retiring["identity"]:
@@ -434,6 +434,7 @@ class SessionEngine:
                 session.pop("retiring")
                 session["error"] = None
                 self.commit("terminal-retired", {"session_id": session["id"]})
+        if status == "planned":
             if self.terminal.exists(spec):
                 raise ValueError("terminal name occupied before launch; refusing adoption")
             publish(
@@ -529,6 +530,8 @@ class SessionEngine:
 
     def _plan_restart(self, session: dict, *, resume: bool, reset_counter: bool = False) -> None:
         """Validate and commit replacement intent before retiring the previous terminal."""
+        if session.get("retiring"):
+            raise ValueError("previous terminal retirement is pending; retry after cleanup")
         retiring = {"spec": session["spec"], "identity": session.get("identity")}
         prepared = copy.deepcopy(session)
         if reset_counter:

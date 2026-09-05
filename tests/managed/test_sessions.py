@@ -306,3 +306,35 @@ class TestRetirementAndStartup:
         client.ready(current["id"], current["generation"], current["native_id"])
         engine.tick()
         assert session(engine)["recoveries"] == 0
+
+
+class TestPendingRetirement:
+    """Queued lifecycle operations cannot abandon the previous owned host."""
+
+    def test_stop_retires_old_generation(self, managed) -> None:
+        """Stop between restart intent and effects also cleans up the old terminal."""
+        area, engine, terminal, client = managed
+        current = session(engine)
+        terminal.terminals[current["spec"]["terminal_name"]]["health"] = "exited"
+        engine.tick()
+        engine.tick()
+        assert session(engine)["status"] == "planned"
+        client.request("stop", {"session_id": current["id"]})
+        engine.tick()
+        assert session(engine)["status"] == "stopped"
+        assert not terminal.terminals
+        assert terminal.launches == 1
+
+    def test_second_restart_preserves_retirement(self, managed) -> None:
+        """Two queued replacements cannot overwrite the original host's identity."""
+        area, engine, terminal, client = managed
+        current = session(engine)
+        old_name = current["spec"]["terminal_name"]
+        terminal.terminals[old_name]["health"] = "exited"
+        client.request("replace", {"session_id": current["id"]})
+        second = client.request("replace", {"session_id": current["id"]})
+        engine.tick()
+        assert engine.state["requests"][second]["status"] == "rejected"
+        assert old_name not in terminal.terminals
+        assert len(terminal.terminals) == 1
+        assert session(engine)["generation"] == 2

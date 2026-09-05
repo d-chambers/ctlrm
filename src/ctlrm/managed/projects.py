@@ -397,6 +397,18 @@ class ProjectStore:
             and (repository is None or job["pr"]["repository"] == repository.strip().casefold())
         ]
 
+    def _completed_version(self, project_id: str, job: dict) -> dict:
+        """Verify the accepted final artifact before trusting retained code or its version."""
+        from ctlrm.managed.artifacts import read_artifact
+
+        runtime = self.job_path(project_id, job["job"]["id"]) / "runtime"
+        area = read_record(runtime / "area.yaml")
+        last = job["run"]["executions"][-1]
+        artifact = read_artifact(runtime, area["id"], last["artifact"])
+        if artifact["run_id"] != job["run"]["id"] or artifact["execution_id"] != last["id"]:
+            raise ValueError("final artifact does not belong to the completed execution")
+        return artifact["version"]
+
     def complete(self, project_id: str) -> dict:
         """Retire completed jobs and retain their code before closing a project."""
         from ctlrm.managed import supervisor
@@ -428,12 +440,10 @@ class ProjectStore:
                                 "job retirement is still pending; retry project complete after checking status"
                             )
                         time.sleep(0.1)
-                last = job["run"]["executions"][-1]
-                artifact = read_record(path / "runtime/artifacts" / f"{last['artifact']}.json")
                 retain(
                     Path(job["launch"]["root"]),
                     path / "retained",
-                    expected_version=artifact["version"],
+                    expected_version=self._completed_version(project_id, job),
                 )
             state["project_status"] = "completed"
             journal.commit(state, "project-completed")
@@ -460,7 +470,11 @@ class ProjectStore:
                 return existing
             for job in self.status(project_id)["jobs"]:
                 retained = self.job_path(project_id, job["job"]["id"]) / "retained"
-                verify_retained(retained, read_record(retained / "manifest.json"))
+                verify_retained(
+                    retained,
+                    read_record(retained / "manifest.json"),
+                    expected_version=self._completed_version(project_id, job),
+                )
             result = archive(
                 self.project_path(project_id),
                 output or self.root / "archives" / f"{project_id}.zip",

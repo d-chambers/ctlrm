@@ -380,7 +380,7 @@ class WorkflowEngine(SessionEngine):
     def apply(self, kind: str, payload: dict) -> None:
         """Validate workflow operations alongside existing session operations."""
         if self.state.get("retiring") or self.state.get("retired"):
-            if kind not in {"workflow-retire", "stop", "supervisor-stop"}:
+            if kind not in {"workflow-retire", "stop", "supervisor-stop", "reconcile-area"}:
                 raise ValueError("job is retiring or archived; no further work can start")
         if kind == "workflow-retire":
             if (self.state.get("run") or {}).get("status") != "completed":

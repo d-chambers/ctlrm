@@ -21,9 +21,7 @@ def retain(root: Path, destination: Path, *, expected_version: dict | None = Non
     manifest_path = destination / "manifest.json"
     if manifest_path.exists():
         manifest = read_record(manifest_path)
-        verify_retained(destination, manifest)
-        if expected_version is not None and manifest["version"] != expected_version:
-            raise ValueError("retained code differs from the completed artifact")
+        verify_retained(destination, manifest, expected_version=expected_version)
         return manifest
     version = fingerprint(root)
     if expected_version is not None and version != expected_version:
@@ -64,7 +62,18 @@ def retain(root: Path, destination: Path, *, expected_version: dict | None = Non
             blob.parent.mkdir(exist_ok=True)
             blob.write_bytes(data)
         patch = subprocess.run(
-            ["git", "-C", str(root), "diff", "--binary", "--cached", "HEAD", "--"],
+            [
+                "git",
+                "-C",
+                str(root),
+                "diff",
+                "--no-textconv",
+                "--no-ext-diff",
+                "--binary",
+                "--cached",
+                "HEAD",
+                "--",
+            ],
             capture_output=True,
             timeout=30,
         )
@@ -102,7 +111,7 @@ def retain(root: Path, destination: Path, *, expected_version: dict | None = Non
 
 def _read_regular(path: Path, limit: int) -> bytes:
     """Read bounded regular files without following symlink targets."""
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
@@ -113,8 +122,19 @@ def _read_regular(path: Path, limit: int) -> bytes:
     return data
 
 
-def verify_retained(directory: Path, manifest: dict) -> None:
-    """Check every retained blob/bundle against its recorded checksum."""
+def verify_retained(
+    directory: Path, manifest: dict, *, expected_version: dict | None = None
+) -> None:
+    """Check the completed version, required inventory, and retained file checksums."""
+    if expected_version is not None and manifest["version"] != expected_version:
+        raise ValueError("retained code differs from the completed artifact")
+    required = {"code.bundle", "index.patch"} | {
+        "blobs/" + info["sha256"]
+        for info in manifest["version"]["files"].values()
+        if "sha256" in info
+    }
+    if manifest["schema_version"] != 1 or set(manifest["files"]) != required:
+        raise ValueError("retained inventory does not match the completed code")
     for name, expected in manifest["files"].items():
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts:
@@ -145,6 +165,8 @@ def _entries(project: Path) -> Iterator[tuple[str, bytes, bool]]:
         if any(part.startswith(".retain-") for part in path.relative_to(project).parts):
             continue
         relative = path.relative_to(project).as_posix()
+        if path.parent.name == "events" and path.name.startswith("."):
+            continue
         if path.is_symlink():
             data = os.fsencode(os.readlink(path))
             link = True

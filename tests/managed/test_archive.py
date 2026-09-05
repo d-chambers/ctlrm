@@ -58,6 +58,16 @@ class TestProjectArchive:
         ).stdout.strip()
         assert fetched == retained["version"]["head"]
         assert store.archive("auth") == result
+        from ctlrm.managed.sessions import message
+        from ctlrm.runtime.messages import MailboxMessage
+
+        with pytest.raises(ValueError, match="retired"):
+            client.area.room.send_message(
+                MailboxMessage.model_validate(message("owner", "message", "late message"))
+            )
+        with pytest.raises(ValueError, match="retired"):
+            client.area.room.init_participant("late")
+        assert store.archive("auth") == result
         with pytest.raises(ValueError, match="completed or archived"):
             store.add_job("auth", "B", "x", human_template, job_id="b")
         subprocess.run(
@@ -142,6 +152,7 @@ class TestProjectArchive:
         def crash(self, state, kind, detail=None):
             """Simulate power loss at the final project lifecycle commit."""
             if kind == "project-archived":
+                (self.root / "events/.000000000002.json.crash").write_text("unpublished event")
                 raise RuntimeError("simulated crash")
             return original(self, state, kind, detail)
 
@@ -165,7 +176,8 @@ class TestProjectArchive:
             store.archive("auth")
         assert not (store.root / "archives/auth.zip").exists()
 
-    def test_retirement_waits_for_process_exit(self, repository, profile) -> None:
+    @pytest.mark.parametrize("drift", [False, True])
+    def test_retirement_waits_for_process_exit(self, repository, profile, drift) -> None:
         """A pending process stop cannot be mistaken for a safely archived runtime."""
         from ctlrm.communication.terminal import StopPending
         from ctlrm.managed.workflows import WorkflowEngine, WorkflowService
@@ -210,6 +222,23 @@ class TestProjectArchive:
             assert engine.state["retiring"]
             assert not engine.state.get("retired")
             engine = WorkflowEngine(client.area, terminal)
+            if drift:
+                subprocess.run(
+                    ["git", "-C", str(repository), "switch", "-c", "drift"],
+                    check=True,
+                    capture_output=True,
+                )
+                engine.tick()
+                assert engine.state["paused"]
+                subprocess.run(
+                    ["git", "-C", str(repository), "switch", "main"],
+                    check=True,
+                    capture_output=True,
+                )
+                request = client.request("reconcile-area", {})
+                engine.tick()
+                assert engine.state["requests"][request]["status"] == "accepted"
+                assert not engine.state["paused"]
             terminal.pending = False
             engine.tick()
             engine.tick()
@@ -221,3 +250,91 @@ class TestProjectArchive:
         with pytest.raises(ValueError, match="retired"):
             supervisor.serve(client.area)
         assert client.area.journal.replay()[1] == before
+
+    def test_text_converter_cannot_change_index(self, store, human_template, tmp_path) -> None:
+        """Retained patches restore raw staged bytes despite repository diff configuration."""
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        root = client.area.root
+
+        def git(*args):
+            """Run Git against the disposable job's worktree."""
+            return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+        (root / ".gitattributes").write_text("source.txt diff=redact\n")
+        git("config", "diff.redact.textconv", "sed s/secret/redacted/g")
+        (root / "source.txt").write_text("staged secret\n")
+        git("add", ".gitattributes", "source.txt")
+        (root / "source.txt").write_text("unstaged secret\n")
+        finish(client)
+        store.complete("auth")
+        retained = store.job_path("auth", "a") / "retained"
+        restored = tmp_path / "restored"
+        subprocess.run(["git", "init", str(restored)], check=True, capture_output=True)
+        for args in [
+            ("fetch", str(retained / "code.bundle"), "HEAD"),
+            ("reset", "--hard", "FETCH_HEAD"),
+            ("apply", "--index", str(retained / "index.patch")),
+        ]:
+            subprocess.run(["git", "-C", str(restored), *args], check=True, capture_output=True)
+        staged = subprocess.run(
+            ["git", "-C", str(restored), "show", ":source.txt"], check=True, capture_output=True
+        ).stdout
+        assert staged == b"staged secret\n"
+        manifest = json.loads((retained / "manifest.json").read_text())
+        checksum = manifest["version"]["files"]["source.txt"]["sha256"]
+        assert (retained / "blobs" / checksum).read_bytes() == b"unstaged secret\n"
+
+    def test_final_artifact_identity(self, store, human_template) -> None:
+        """An edited artifact document cannot redefine the accepted final version."""
+        from ctlrm.managed.artifacts import fingerprint
+
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        finish(client)
+        last = store.job_status("auth", "a")["run"]["executions"][-1]
+        artifact = client.area.room.root / "artifacts" / f"{last['artifact']}.json"
+        record = json.loads(artifact.read_text())
+        (client.area.root / "source.txt").write_text("unaccepted later version\n")
+        record["version"] = fingerprint(client.area.root)
+        artifact.write_text(json.dumps(record))
+        with pytest.raises(ValueError, match="invalid artifact identity"):
+            store.archive("auth")
+        assert store.status("auth")["status"] == "active"
+
+    def test_incomplete_retained_inventory(self, store, human_template) -> None:
+        """Removing a checksum entry cannot hide missing retained history."""
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        finish(client)
+        store.complete("auth")
+        retained = store.job_path("auth", "a") / "retained"
+        manifest = json.loads((retained / "manifest.json").read_text())
+        del manifest["files"]["code.bundle"]
+        (retained / "code.bundle").unlink()
+        (retained / "manifest.json").write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="inventory"):
+            store.archive("auth")
+
+    def test_fifo_rejected_without_waiting(self, tmp_path) -> None:
+        """Unsupported named pipes fail promptly rather than blocking before file validation."""
+        import os
+        import sys
+
+        project = tmp_path / "records"
+        project.mkdir()
+        os.mkfifo(project / "pipe")
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; from ctlrm.managed.archive import archive; archive(Path(sys.argv[1]), Path(sys.argv[2]))",
+                str(project),
+                str(tmp_path / "archive.zip"),
+            ],
+            capture_output=True,
+            timeout=5,
+        )
+        assert result.returncode != 0
+        assert b"unsupported or oversized archive file" in result.stderr
+        assert not (tmp_path / "archive.zip").exists()

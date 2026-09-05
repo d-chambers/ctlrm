@@ -10,33 +10,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ctlrm.runtime import ProjectRuntime
+from ctlrm.runtime.filesystem import mkdir_shared as _mkdir_shared
 from ctlrm.runtime.manifest import RoomManifest
 from ctlrm.runtime.messages import MailboxMessage
 from ctlrm.runtime.participants import ParticipantSignature, validate_participant_id
 
-_DIRECTORY_MODE = 0o2770
 _FILE_MODE = 0o660
 _UNSUPPORTED_LINK_ERRNOS = {errno.EPERM, errno.EXDEV, errno.EOPNOTSUPP}
-
-
-def _mkdir_shared(path: Path) -> None:
-    """Create group-writable directories and persist their parent entries."""
-    if not path.parent.exists():
-        _mkdir_shared(path.parent)
-    try:
-        path.mkdir(mode=_DIRECTORY_MODE)
-    except FileExistsError:
-        if not path.is_dir():
-            raise NotADirectoryError(str(path))
-    else:
-        path.chmod(_DIRECTORY_MODE)
-    # Also sync on retries after an earlier mkdir succeeded but its fsync failed.
-    for directory in (path, path.parent):
-        descriptor = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
 
 
 def _write_exclusive_atomic(path: Path, text: str) -> None:
@@ -161,7 +141,7 @@ class RoomRuntime(ProjectRuntime):
             capabilities=capabilities,
             joined_at=joined_at,
             restart_command=restart_command,
-            resume=not created,
+            resume=True,
         )
         return InitializationResult(self.room_path, signature_path, created)
 

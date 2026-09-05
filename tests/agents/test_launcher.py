@@ -111,7 +111,7 @@ class TestLaunchDurabilityFailure:
 
         def fail_directory(descriptor: int) -> None:
             """Simulate storage refusing the directory durability barrier."""
-            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            if path.exists() and stat.S_ISDIR(os.fstat(descriptor).st_mode):
                 raise OSError("directory fsync failed")
             original(descriptor)
 

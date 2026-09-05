@@ -203,7 +203,12 @@ class CtlrmApp(App[None]):
         if project is None:
             self.workspace.status = "No project selected"
             return
-        participant = self.launcher.launch(project, request)
+        try:
+            participant = self.launcher.launch(project, request)
+        except (ValueError, OSError, RuntimeError) as error:
+            self.workspace.status = f"Launch failed: {error}"
+            self.notify(self.workspace.status, severity="error")
+            return
         self.workspace.selected_participant_id = participant.id
         self._refresh_participants_panel()
 

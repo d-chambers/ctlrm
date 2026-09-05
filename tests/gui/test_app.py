@@ -111,3 +111,31 @@ class TestApp:
         app = CtlrmApp(Workspace.from_projects([]))
         assert app.launcher.registry_path.name == "registry.toml"
         assert app.launcher.registry_path.parent.name == "ctlrm"
+
+
+class TestLaunchErrors:
+    """Expected launch failures are visible without exiting the TUI."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_launch(self, tmp_path: Path) -> None:
+        """A duplicate participant error leaves the application running."""
+
+        class RejectingLauncher:
+            """Simulate a validated launch rejection."""
+
+            def launch(self, project, request):
+                """Reject a duplicate before returning a participant."""
+                raise ValueError("participant already registered")
+
+        project = Project(id="p", name="P", root=tmp_path)
+        workspace = Workspace.from_projects([project])
+        app = CtlrmApp(workspace, launcher=RejectingLauncher())
+        async with app.run_test() as pilot:
+            app.launch_agent_from_request(
+                AgentLaunchRequest(
+                    id="worker", name="Worker", role="work", provider=Provider.CLAUDE
+                )
+            )
+            await pilot.pause()
+            assert "already registered" in workspace.status
+            assert not project.participants

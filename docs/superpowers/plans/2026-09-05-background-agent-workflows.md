@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: Implementation in progress. Milestone 0 has measured native recovery evidence in `docs/provider-session-recovery.md`. Remaining schemas and operations describe intended behavior, not features already available in the CLI.
+Status: Milestones 0–3 are merged locally. Milestone 4 is implemented and under review, with native and mixed-provider evidence in `docs/provider-session-recovery.md`. Milestone 5 (TUI) is deferred at the user’s request pending a separate design discussion.
 
 ## Product contract
 

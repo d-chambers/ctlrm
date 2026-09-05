@@ -644,3 +644,46 @@ class TestHandoffCrashes:
             assert len(terminal.wakes) == 2 and terminal.wakes[0] == terminal.wakes[1]
             assert len(restarted.state["run"]["executions"]) == 1
             assert restarted.active()["status"] == "pending"
+
+
+class TestApprovalVersionRace:
+    """The artifact attributed to an approval must be the exact version that was checked."""
+
+    def test_captured_version_is_verified(self, repository, template, monkeypatch) -> None:
+        """A change between separate observations cannot be forwarded as already approved."""
+        import ctlrm.managed.artifacts as artifacts
+        from ctlrm.managed.storage import read_record
+
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            complete(engine, client, "completed")
+            payload = prepare(engine, client)
+            client.request("workflow-ack", payload)
+            engine.tick()
+            incoming = read_record(
+                client.area.room.root / "artifacts" / f"{payload['input_artifact']}.json"
+            )
+            original = artifacts.fingerprint
+            observed = []
+
+            def fingerprint(root):
+                """Change files if approval independently observes them a second time."""
+                if observed:
+                    (root / "source.txt").write_text("changed between verification and capture")
+                observed.append(1)
+                return original(root)
+
+            monkeypatch.setattr(artifacts, "fingerprint", fingerprint)
+            request = client.request(
+                "workflow-report",
+                {**payload, "outcome": "approved", "summary": "Approved delivered version"},
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "accepted"
+            accepted = engine.state["run"]["executions"][1]
+            outgoing = read_record(
+                client.area.room.root / "artifacts" / f"{accepted['artifact']}.json"
+            )
+            assert incoming["version"] == outgoing["version"]

@@ -116,3 +116,19 @@ class TestCodexOwnership:
             ProviderProfile(
                 provider="codex", executable=sys.executable, context=str(tmp_path), input_mode=mode
             )
+
+
+class TestCodexExecArguments:
+    """Obsolete interactive permission flags fail before immutable profile publication."""
+
+    @pytest.mark.parametrize("argument", ["--ask-for-approval=never", "-a"])
+    def test_interactive_approval_flag(self, tmp_path, argument) -> None:
+        """Use Codex exec's configuration interface without silently changing permission policy."""
+        with pytest.raises(ValueError, match="does not accept"):
+            ProviderProfile(
+                provider="codex",
+                executable="codex",
+                context=str(tmp_path),
+                input_mode="native",
+                arguments=[argument],
+            )

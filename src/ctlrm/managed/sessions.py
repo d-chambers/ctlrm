@@ -49,6 +49,16 @@ def reference(participant: str, message_id: str) -> str:
     )
 
 
+def pending_message(session: dict) -> dict | None:
+    """Select durable work awaiting acknowledgment or recovery reconciliation."""
+    if not session["ready"] or session["status"] not in {"ready", "reconciling"}:
+        return None
+    if session["recovering"]:
+        return session.get("reconciliation")
+    work = session.get("work")
+    return work["message"] if work and work["status"] == "pending" else None
+
+
 class SessionService:
     """Client API shared by CLI/TUI; only submissions and owned signatures are written."""
 
@@ -495,15 +505,8 @@ class SessionEngine:
             self._schedule_recovery(session, profile)
             return
         if session["ready"]:
-            outbound = (
-                session.get("reconciliation")
-                if session["recovering"]
-                else (session.get("work") or {}).get("message")
-            )
-            pending = (
-                session["recovering"] or (session.get("work") or {}).get("status") == "pending"
-            )
-            if outbound and pending:
+            outbound = pending_message(session)
+            if outbound:
                 mailbox(self.area, session["participant"], outbound)
                 if profile.input_mode == "manual":
                     return

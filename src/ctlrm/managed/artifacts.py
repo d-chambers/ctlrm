@@ -102,7 +102,7 @@ def capture(area: Area, run_id: str, execution_id: str) -> str:
     return reference
 
 
-def verify(area: Area, reference: str) -> None:
+def verify(area: Area, reference: str, *, version: dict | None = None) -> None:
     """Reject approvals if the delivered content version changed during review."""
     from ctlrm.runtime.paths import validate_path_component
 
@@ -110,5 +110,5 @@ def verify(area: Area, reference: str) -> None:
     record = read_record(area.room.root / "artifacts" / f"{reference}.json")
     if reference != "artifact-" + digest(record) or record.get("area_id") != area.data["id"]:
         raise ValueError("invalid artifact identity")
-    if record["version"] != fingerprint(area.root):
+    if record["version"] != (version if version is not None else fingerprint(area.root)):
         raise ValueError("input artifact changed; retry review against a new version")

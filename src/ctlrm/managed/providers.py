@@ -35,6 +35,12 @@ class ProviderProfile(BaseModel):
             raise ValueError(
                 "managed Codex requires input_mode native to own its provider processes"
             )
+        if self.provider == "codex" and any(
+            value.split("=", 1)[0] in {"--ask-for-approval", "-a"} for value in self.arguments
+        ):
+            raise ValueError(
+                "Codex exec does not accept --ask-for-approval/-a; configure approval_policy with --config instead"
+            )
         if self.input_mode == "native" and self.provider != "codex":
             raise ValueError("native input transport currently requires Codex")
         reserved = {

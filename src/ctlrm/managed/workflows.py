@@ -9,7 +9,7 @@ import sys
 from ctlrm.managed.area import Area, worktree
 from ctlrm.managed.artifacts import capture, verify
 from ctlrm.managed.sessions import SessionEngine, SessionService, mailbox, message
-from ctlrm.managed.storage import identifier, now
+from ctlrm.managed.storage import identifier, now, read_record
 from ctlrm.runtime.participants import validate_participant_id
 from ctlrm.runtime.paths import validate_path_component
 from ctlrm.runtime.workflows import StepExecution, Task, WorkflowRun, WorkflowTemplate
@@ -263,9 +263,10 @@ class WorkflowEngine(SessionEngine):
             if not isinstance(outcome, str) or not isinstance(summary, str) or len(summary) > 16384:
                 raise ValueError("outcome and a bounded summary are required")
             destination = transition(self.template, execution["step"], outcome)
-            if outcome == "approved" and execution["input"].get("artifact"):
-                verify(self.area, execution["input"]["artifact"])
             artifact = capture(self.area, self.state["run"]["id"], execution["id"])
+            if outcome == "approved" and execution["input"].get("artifact"):
+                captured = read_record(self.area.room.root / "artifacts" / f"{artifact}.json")
+                verify(self.area, execution["input"]["artifact"], version=captured["version"])
             self.area.validate()
             execution.update(
                 status="completed", outcome=outcome, summary=summary, artifact=artifact

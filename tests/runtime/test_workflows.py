@@ -89,7 +89,7 @@ class TestTaskTerminology:
     def test_task_instructions_and_legacy(self) -> None:
         """Both YAML spellings load while new snapshots expose one task map."""
         data = copy.deepcopy(HUMAN)
-        data["schema_version"] = 2
+        data["schema_version"] = 1
         data["tasks"] = data.pop("steps")
         data["tasks"]["approve"]["instructions"] = "Review the blast radius of the job changes."
         template = WorkflowTemplate.model_validate(data)

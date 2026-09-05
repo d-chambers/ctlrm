@@ -1,13 +1,23 @@
+"""Mailbox message parsing for runtime communication files."""
+
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from ctlrm.runtime.documents import parse_markdown_document
+from ctlrm.runtime.participants import validate_participant_id
+from ctlrm.runtime.paths import validate_path_component
+from ctlrm.runtime.documents import normalize_timestamp
 
 
 class MailboxMessage(BaseModel):
+    """Message read from a participant mailbox markdown file."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
     from_: str = Field(alias="from")
     to: str
@@ -21,30 +31,39 @@ class MailboxMessage(BaseModel):
     files: list[str] = Field(default_factory=list)
     body: str = ""
 
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        """Reject message identifiers that are unsafe filenames."""
+        return validate_path_component(value, label="message id", max_length=128)
+
+    @field_validator("from_", "to")
+    @classmethod
+    def _validate_participant_ids(cls, value: str) -> str:
+        """Reject sender and recipient identifiers that are unsafe paths."""
+        return validate_participant_id(value)
+
     @field_validator("created_at", mode="before")
     @classmethod
     def _coerce_created_at(cls, value: object) -> str:
-        if isinstance(value, datetime):
-            return value.isoformat()
-        return str(value)
+        """Normalize datetime-like values from YAML front matter."""
+        return normalize_timestamp(value)
 
     @classmethod
     def parse(cls, text: str) -> MailboxMessage:
-        front_matter, body = _split_front_matter(text)
-        message = cls.model_validate(yaml.safe_load(front_matter))
+        """Parse a mailbox message from markdown with YAML front matter."""
+        metadata, body = parse_markdown_document(text)
+        message = cls.model_validate(metadata)
         message.body = body
         return message
 
     @classmethod
     def read(cls, path: Path) -> MailboxMessage:
-        return cls.parse(path.read_text())
+        """Read and parse a mailbox message file."""
+        return cls.parse(path.read_text(encoding="utf-8"))
 
-
-def _split_front_matter(text: str) -> tuple[str, str]:
-    if not text.startswith("---\n"):
-        raise ValueError("missing YAML front matter")
-    try:
-        front_matter, body = text[4:].split("\n---\n", 1)
-    except ValueError as exc:
-        raise ValueError("front matter is not closed") from exc
-    return front_matter, body
+    def to_markdown(self) -> str:
+        """Serialize the message as Markdown with YAML front matter."""
+        data = self.model_dump(mode="json", by_alias=True, exclude={"body"}, exclude_none=True)
+        front_matter = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
+        return f"---\n{front_matter}\n---\n{self.body.rstrip()}\n"

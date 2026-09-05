@@ -5,3 +5,7 @@
 .ruff_cache/
 __pycache__/
 *.py[cod]
+.scratch/
+.coverage*
+htmlcov/
+dist/

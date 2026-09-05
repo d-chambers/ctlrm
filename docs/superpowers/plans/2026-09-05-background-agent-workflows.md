@@ -166,11 +166,11 @@ Acceptance: evidence that the core recovery requirement is achievable before bui
 
 ### 1. Restore the supported baseline
 
-- [ ] Repair moved imports and the registry save that discards other entries; establish worktree-based registry identity and safe concurrent updates.
-- [ ] Restore/adapt retained boundary tests from Git history. Preserve unrelated working-tree edits. Keep CLI, room, registry, models, and workspace coverage; replace old tmux argv assertions and participant-only scheduler tests with the new adapter/transition contract tests. The deleted `dev.py` hot-reload feature and its tests are outside this milestone; remove remaining obsolete UI hooks rather than reviving them incidentally.
-- [ ] Fix prompt normalization on init recovery, malformed-YAML error handling, and inbox sender/recipient/filename validation while keeping valid messages visible.
-- [ ] Resolve formatting failures, consolidate role placeholders, use `AGENTS.md`, and ignore temporary review/coverage artifacts.
-- [ ] Add CI for tests, lint/format, supported Python versions, and package build/install smoke checks.
+- [x] Repair moved imports and the registry save that discards other entries; establish worktree-based registry identity and safe concurrent updates.
+- [x] Restore/adapt retained boundary tests from Git history. Preserve unrelated working-tree edits. Keep CLI, room, registry, models, and workspace coverage; replace old tmux argv assertions and participant-only scheduler tests with the new adapter/transition contract tests. The deleted `dev.py` hot-reload feature and its tests are outside this milestone; remove remaining obsolete UI hooks rather than reviving them incidentally.
+- [x] Fix prompt normalization on init recovery, malformed-YAML error handling, and inbox sender/recipient/filename validation while keeping valid messages visible.
+- [x] Resolve formatting failures, consolidate role placeholders, use `AGENTS.md`, and ignore temporary review/coverage artifacts.
+- [x] Add CI for tests, lint/format, supported Python versions, and package build/install smoke checks.
 
 Acceptance: the retained CLI/package imports and checks pass; persistence preserves other worktrees.
 

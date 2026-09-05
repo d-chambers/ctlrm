@@ -1,3 +1,5 @@
+"""Small tmux command objects and command runner implementations."""
+
 from __future__ import annotations
 
 import subprocess
@@ -7,34 +9,45 @@ from typing import Protocol
 
 @dataclass(frozen=True)
 class TmuxTargetRef:
+    """Reference to a tmux pane."""
+
     session: str
     window: str
     pane: str
 
     @property
     def selector(self) -> str:
+        """Return the tmux selector string for this target."""
+        if self.pane.startswith("%"):
+            return self.pane
         return f"{self.session}:{self.window}.{self.pane}"
 
 
 @dataclass(frozen=True)
 class TmuxCommand:
+    """A tmux command with executable and argument list."""
+
     program: str
     args: list[str]
 
     @classmethod
     def send_keys(cls, target: TmuxTargetRef, text: str) -> TmuxCommand:
+        """Build a command that sends text and Enter to a pane."""
         return cls("tmux", ["send-keys", "-t", target.selector, text, "Enter"])
 
     @classmethod
     def capture_pane(cls, target: TmuxTargetRef) -> TmuxCommand:
+        """Build a command that captures pane text."""
         return cls("tmux", ["capture-pane", "-p", "-t", target.selector])
 
     @classmethod
     def new_session(cls, session: str, workdir: str) -> TmuxCommand:
+        """Build a command that creates or attaches a detached session."""
         return cls("tmux", ["new-session", "-d", "-A", "-s", session, "-c", workdir])
 
     @classmethod
     def split_window(cls, session: str, workdir: str, command: list[str]) -> TmuxCommand:
+        """Build a command that opens a pane and prints its pane id."""
         return cls(
             "tmux",
             [
@@ -52,11 +65,18 @@ class TmuxCommand:
 
 
 class CommandRunner(Protocol):
-    def run(self, command: TmuxCommand) -> str: ...
+    """Protocol for executing tmux commands."""
+
+    def run(self, command: TmuxCommand) -> str:
+        """Execute a tmux command and return stdout."""
+        ...
 
 
 class SubprocessCommandRunner:
+    """Command runner backed by ``subprocess.run``."""
+
     def run(self, command: TmuxCommand) -> str:
+        """Execute a tmux command and return stdout."""
         result = subprocess.run(
             [command.program, *command.args],
             check=True,

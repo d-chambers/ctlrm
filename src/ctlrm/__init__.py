@@ -1,1 +1,3 @@
-__version__ = "0.1.0"
+"""Top-level package metadata for ctlrm."""
+
+from ctlrm.version import __version__ as __version__

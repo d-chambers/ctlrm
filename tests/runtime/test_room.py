@@ -529,3 +529,17 @@ class TestSharedRoomOwnership:
         """Participant directories must not collide with signature filenames."""
         with pytest.raises(ValueError, match="reserved .yaml"):
             RoleAssignment(participant=identifier, role="review")
+
+
+class TestConflictDiagnostics:
+    """Conflicts identify the immutable destination, not a temporary link source."""
+
+    def test_duplicate_message_names_destination(self, tmp_path: Path) -> None:
+        """CLI callers can use the error filename to locate the existing record."""
+        runtime = RoomRuntime(tmp_path)
+        initialize(runtime)
+        join_reviewer(runtime)
+        destination = runtime.send_message(message())
+        with pytest.raises(FileExistsError) as caught:
+            runtime.send_message(message())
+        assert caught.value.filename == str(destination)

@@ -93,3 +93,22 @@ class TestRegistryInitialParticipants:
         path = tmp_path / "registry.toml"
         Registry.add_participant(path, project, other)
         assert [p.id for p in Registry.load(path).projects[0].participants] == ["owner", "reviewer"]
+
+
+class TestRegistryCallerAdditions:
+    """Persist caller additions without overwriting concurrent registry state."""
+
+    def test_in_memory_human_survives_agent_save(self, tmp_path: Path) -> None:
+        """A human added through Workspace remains after an agent is persisted."""
+        from ctlrm.models import Project, Participant
+        from ctlrm.workspace import Workspace
+
+        path = tmp_path / "registry.toml"
+        project = Project(id="p", name="P", root=tmp_path)
+        Registry(projects=[project]).save_atomic(path)
+        workspace = Workspace.from_projects([project])
+        human = Participant.human("owner", "Owner", "approve", tmp_path)
+        workspace.add_participant(human)
+        agent = Participant.human("reviewer", "Reviewer", "review", tmp_path)
+        Registry.add_participant(path, project, agent)
+        assert {p.id for p in Registry.load(path).projects[0].participants} == {"owner", "reviewer"}

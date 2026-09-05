@@ -36,6 +36,11 @@ class TmuxCommand:
         return cls("tmux", ["send-keys", "-t", target.selector, text, "Enter"])
 
     @classmethod
+    def kill_pane(cls, target: TmuxTargetRef) -> TmuxCommand:
+        """Stop exactly the pane created by a failed launch."""
+        return cls("tmux", ["kill-pane", "-t", target.selector])
+
+    @classmethod
     def capture_pane(cls, target: TmuxTargetRef) -> TmuxCommand:
         """Build a command that captures pane text."""
         return cls("tmux", ["capture-pane", "-p", "-t", target.selector])

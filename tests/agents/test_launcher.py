@@ -64,3 +64,34 @@ class TestLauncher:
         registry_text = registry_path.read_text()
         assert 'id = "claude-review"' in registry_text
         assert 'provider = "claude"' in registry_text
+
+
+class TestLaunchRegistrationFailure:
+    """Persistence failures must not leave newly launched agents untracked."""
+
+    def test_stale_duplicate_stops_only_new_pane(self, tmp_path: Path) -> None:
+        """A second stale caller is rejected and its created pane is stopped."""
+        import pytest
+        from ctlrm.registry import Registry
+
+        path = tmp_path / "registry.toml"
+        project = Project(id="p", name="P", root=tmp_path)
+        request = AgentLaunchRequest(
+            id="worker", name="Worker", role="work", provider=Provider.CLAUDE
+        )
+        AgentLauncher(RecordingRunner(), path).launch(project, request)
+
+        class NewPaneRunner(RecordingRunner):
+            """Give the competing launch its own terminal identity."""
+
+            def run(self, command: TmuxCommand) -> str:
+                """Record commands and distinguish the competing pane."""
+                return super().run(command).replace("%42", "%43")
+
+        runner = NewPaneRunner()
+        stale = Project(id="p", name="P", root=tmp_path)
+        with pytest.raises(ValueError, match="already registered"):
+            AgentLauncher(runner, path).launch(stale, request)
+        assert runner.commands[-1].args == ["kill-pane", "-t", "%43"]
+        assert Registry.load(path).projects[0].participants[0].tmux_target.pane == "%42"
+        assert stale.participants == []

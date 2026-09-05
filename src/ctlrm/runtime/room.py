@@ -50,6 +50,8 @@ def _write_exclusive_atomic(path: Path, text: str) -> None:
         try:
             os.link(temporary_path, path)
         except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                raise FileExistsError(errno.EEXIST, "record already exists", str(path)) from exc
             if exc.errno in _UNSUPPORTED_LINK_ERRNOS:
                 raise RuntimeError("room storage must support atomic hard links") from exc
             raise

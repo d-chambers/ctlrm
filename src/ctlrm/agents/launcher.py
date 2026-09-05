@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from ctlrm.models import Participant, Project, Provider, TmuxTarget
 from ctlrm.registry import Registry
 from ctlrm.runtime import ProjectRuntime
-from ctlrm.communication.tmux import CommandRunner, TmuxCommand
+from ctlrm.communication.tmux import CommandRunner, TmuxCommand, TmuxTargetRef
 
 
 class AgentLaunchRequest(BaseModel):
@@ -85,7 +85,17 @@ class AgentLauncher:
             Path(workdir),
             TmuxTarget(session=session, window="agents", pane=pane),
         )
-        self._save_registry(project, participant)
+        try:
+            self._save_registry(project, participant)
+        except Exception as error:
+            target = TmuxTargetRef(session=session, window="agents", pane=pane)
+            try:
+                self.runner.run(TmuxCommand.kill_pane(target))
+            except Exception as cleanup_error:
+                raise RuntimeError(
+                    f"registration failed and pane {pane} could not be stopped: {cleanup_error}"
+                ) from error
+            raise
         project.participants.append(participant)
         return participant
 

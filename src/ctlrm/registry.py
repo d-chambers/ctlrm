@@ -93,6 +93,11 @@ class Registry(BaseModel):
         root = project.root.resolve()
         for existing in self.projects:
             if existing.root.resolve() == root:
+                known = {item.id for item in existing.participants}
+                for item in project.participants:
+                    if item.id not in known:
+                        existing.participants.append(item.model_copy(deep=True))
+                        known.add(item.id)
                 return existing
             if existing.id == project.id:
                 raise ValueError(f"project id already belongs to another worktree: {project.id}")

@@ -220,7 +220,9 @@ Initial structure:
 
 ```text
 .ctlrm/
+  room.md
   participants/
+    <participant-id>.yaml
     <participant-id>/
       state.md
       inbox/
@@ -233,6 +235,16 @@ Initial structure:
 ```
 
 `.ctlrm/` should be added to the project `.gitignore` when `ctlrm` initializes a project.
+
+### Room Definition And Participant Signatures
+
+The first participant creates `.ctlrm/room.md` with exclusive-create semantics. Its Markdown body is the canonical prompt, while its YAML front matter records the room ID, author, creation time, and complete participant-to-role roster. The author must assign itself a role, participant IDs must be unique, and only assigned IDs can join. Combining prompt and roster in one immutable document avoids partially initialized authority.
+
+Each participant invokes `ctlrm join` to drop its own immutable YAML signature directly into `.ctlrm/participants/<participant-id>.yaml`. Join accepts no role argument; it copies the participant's assigned role from `room.md`. A signature records `protocol_version`, `room_id`, `id`, `name`, `role`, `kind`, optional `provider`, `joined_at`, and optional `capabilities`.
+
+Initialization is resumable: if creating the author's signature fails after `room.md` is created, the same author can repeat `ctlrm init` with the same prompt and roster to finish registration. Mutable presence and progress remain planned for `.ctlrm/participants/<participant-id>/state.md`; the current CLI does not manage them.
+
+Signature ownership and message attribution are cooperative protocol conventions rather than authentication. The runtime prevents accidental overwrite through exclusive creation, but any process with directory write access can remove files or claim another sender ID.
 
 ### Mailbox Messages
 

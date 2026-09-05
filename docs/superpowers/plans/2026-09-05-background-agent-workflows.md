@@ -92,7 +92,7 @@ Before building the scheduler, perform a manual spike demonstrating actual nativ
 
 1. Launch the provider inside the selected worktree with bootstrap instructions for its assigned identity and room, identity/recovery registration, work acknowledgment, outcome reporting, and status reconciliation operations. Deliver a step or initial user prompt only after readiness succeeds.
 2. The agent registers its identity and publishes a structured recovery revision: schema version, ctlrm/native session IDs, generation, workdir, executable/arguments, required environment names, and timestamp. Also record a non-secret provider context identifier, such as its state-directory path or available account identifier, and verify it before resume. The adapter may help discover the native ID; the agent must supply/acknowledge its recovery instructions. A human-readable explanation may supplement the executable record.
-3. Validate the executable against the configured provider profile and verify the workdir and session association. Keep secret values out of the record. Resolve required environment values from the configured runtime environment; missing names block resume with a specific diagnostic instead of triggering repeated failed launches.
+3. Compose the executed launch/resume vector from the authoritative provider profile and acknowledged native session ID; an agent may supply a minimal executable/ID acknowledgment without repeating profile flags. Validate its executable against that profile and verify the workdir and session association. Keep secret values out of the record. Resolve required environment values from the configured runtime environment; missing names block resume with a specific diagnostic instead of triggering repeated failed launches.
 4. Require a valid recovery record before declaring the agent ready. Registration timeouts or unsupported native resume are visible blocked conditions. Preserve `--restart-command` for legacy rooms, but it alone is not the managed readiness contract.
 5. Monitor the actual provider process and generation. A live pane containing a shell is not a healthy agent. Distinguish exit, registration timeout, and uncertain responsiveness; inactivity alone is not grounds to kill a session.
 6. On confirmed unexpected death, use bounded retries/backoff to resume the specific native session. Require a new generation acknowledgment. Send a status-reconciliation request referencing the existing work ID, not an instruction to repeat the work.
@@ -160,7 +160,7 @@ No filesystem transaction atomically completes an external agent operation. Guar
 
 - [x] In a disposable Git worktree, launch one real provider, obtain agent-acknowledged recovery information for a controller-allocated native ID, terminate it, and resume the exact native conversation.
 - [x] Record the capability matrix and demonstrate retained context plus a readiness/status acknowledgment after resume.
-- [x] Use this result to select the interactive shell-parent transport and native recovery contract; implement the mailbox bootstrap in milestone 2. A failed feasibility check blocks claims of native recovery; replacement remains a separate operation.
+- [x] Use this result to select the interactive shell-parent transport and native recovery contract. The mailbox bootstrap remains a milestone 2 deliverable. A failed feasibility check blocks claims of native recovery; replacement remains a separate operation.
 
 Acceptance: evidence that the core recovery requirement is achievable before building the execution machinery around it.
 

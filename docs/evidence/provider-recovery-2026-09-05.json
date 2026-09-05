@@ -39,5 +39,7 @@
   "permission_mode": "plan",
   "tools": [],
   "provider_environment_names": [],
-  "native_state_context": "~/.claude"
+  "native_state_context": "~/.claude",
+  "schema_version": 1,
+  "executable_path": "/home/derrick/.local/share/claude/versions/2.1.261"
 }

@@ -11,7 +11,7 @@ Date: 2026-09-05
 
 Terminal management used libtmux 0.62.0 and tmux 3.4 on Linux. The probe ran in a disposable linked Git worktree on its own branch and isolated tmux socket with `/dev/null` as the tmux configuration. It did not access application source or credentials through agent tools.
 
-## Verified Claude transport
+## Verified streamed transport
 
 The probe used Claude's persistent print-mode stream interface, with a FIFO kept open for successive user messages and JSONL output written to a temporary evidence file. A second probe also verified the native interactive terminal path described below. Neither probe implements the future ctlrm mailbox bootstrap.
 
@@ -33,17 +33,18 @@ Each input line was a JSON object with `type: user` and a `message` containing `
 
 After that first turn completed, the probe read the managed pane PID, queried its direct children with `ps -o pid= --ppid <pane-pid>`, asserted exactly one provider child, and sent SIGKILL to that verified child while it awaited more input. It started another managed terminal using `--resume` and requested status reconciliation and the remembered token without including that token in the resume prompt. The response returned `ready: true` and the exact original token; the result event retained the original session ID. Both provider result events reported success. The isolated tmux server was then stopped.
 
-The streamed probe establishes recovery after a completed result; the interactive probe establishes recovery after a persisted readiness response. Neither proves recovery of an unfinished tool call, tools-enabled execution, other permission modes, exactly-once effects, missing state files, changed credentials, or host reboot. Those cases require the planned uncertain-work and replacement paths.
+The streamed probe establishes recovery after a completed result; the interactive probe establishes recovery after a persisted readiness response. Neither proves recovery of an unfinished tool call, tools-enabled execution, other permission modes, exactly-once effects, missing state files, kills during transcript writes or streaming turns, changed credentials, or host reboot. Malformed transcript data must block recovery; these probes did not test provider repair behavior. Those cases require the planned uncertain-work and replacement paths.
 
 ## Adapter implications
 
-- Allocate or discover the native ID before declaring managed readiness; require the agent's acknowledgment and resume instructions.
+- Allocate or discover the native ID before declaring managed readiness; require the agent's acknowledgment and resume instructions. The controller composes the executed vector from the selected profile and acknowledged native ID. A minimal agent acknowledgment need not repeat profile flags; validation checks the executable/session association, and profile settings remain authoritative.
 - Preserve the native state directory/provider context and the transport options alongside executable arguments. An absent session or unavailable provider context is a recovery failure, never evidence that a new conversation successfully resumed.
 - Readiness must refer to the current managed generation as well as the native session ID.
 - A first-launch workspace trust dialog can block interactive startup. Surface it as waiting for user trust, preserve the pane for attachment, and do not declare readiness or silently approve unfamiliar worktrees.
-- Supervise the provider process, not just the pane. The successful probe retained a shell parent; direct `exec` startup attempts ended with SIGHUP in this environment and are not the validated launch path. Diagnose that difference in the terminal/provider adapter implementation rather than assuming both forms work.
+- Supervise the provider process, not just the pane. The successful probe retained a shell parent; both `new_session(window_command="exec claude ... < fifo > output")` and typing that `exec` form into an explicit shell pane ended with SIGHUP in this environment; the latter used `remain-on-exit=on`. These are observations, not a diagnosed cause or the validated launch path. Diagnose that difference in the terminal/provider adapter implementation rather than assuming both forms work.
 - Use libtmux with an isolated/configured server and an explicit shell wrapper for the verified path. In the probe, the shell and provider were distinct processes, so the shell surviving provider death did not count as recovery.
-- Resume with a status query for the prior work ID. The token test establishes context retention, not whether arbitrary interrupted work already took effect.
+- Production launch arguments carry only a bounded bootstrap/mailbox reference; the inline nonce and instructions in these probes were disposable test data.
+- Resume with a status query for the prior work ID. The token test establishes context retention, not whether arbitrary interrupted work already took effect. No bogus-ID negative control was run; the probe requires nonce equality regardless of the CLI exit behavior, so a newly created conversation would not satisfy the test.
 - Keep full machine-specific logs under temporary `.scratch/`. A small committed evidence excerpt records matching IDs and the burned, disposable test token without credentials.
 
 ## Streamed reproduction checklist
@@ -71,3 +72,5 @@ The successful interactive response is retained in [the evidence excerpt](eviden
 5. Read the resumed assistant text from the same native transcript and assert readiness, matching ID, and exact token equality. Shut down only the isolated server.
 
 The [streamed evidence excerpt](evidence/provider-recovery-streamed-2026-09-05.json) retains the independent streamed result. Both evidence files include launch/resume vectors, recorded timestamps, and the intentionally restricted test profile.
+
+The evidence JSON files are versioned experiment records, not templates for the future runtime recovery schema. They retain vectors, responses, IDs, and token assertions. Trust-dialog handling, renderer fallback, and the sole-child process check are recorded in the procedure prose; full terminal/process logs remain temporary.

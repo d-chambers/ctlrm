@@ -665,10 +665,10 @@ class TestConcurrentInitialization:
         assert runtime.read_signature("coordinator").id == "coordinator"
 
 
-class TestLegacySharedDirectories:
-    """Legacy terminal initialization uses the same shared directory contract."""
+class TestSharedDirectories:
+    """Terminal initialization uses the same shared directory contract."""
 
-    def test_legacy_then_room(self, tmp_path: Path) -> None:
+    def test_shared_initialization(self, tmp_path: Path) -> None:
         """Launching first does not prevent later shared-group room access."""
         from ctlrm.runtime import ProjectRuntime
 

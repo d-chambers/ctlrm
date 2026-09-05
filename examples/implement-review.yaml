@@ -2,7 +2,7 @@ schema_version: 1
 name: implement-review
 entry: implement
 limits:
-  max_step_executions: 12
+  max_task_executions: 12
 profiles:
   coding-agent:
     provider: codex

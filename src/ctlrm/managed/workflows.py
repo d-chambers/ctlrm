@@ -60,14 +60,6 @@ class WorkflowService(SessionService):
             area = Area.load(root)
             definition = area.data.get("definition") or {}
             expected = {"template": snapshot, "bindings": bindings}
-            normalized = (
-                {
-                    **definition,
-                    "template": WorkflowTemplate.from_snapshot(definition["template"]).model_dump(),
-                }
-                if "template" in definition
-                else definition
-            )
             if request_id is None:
                 raise ValueError(
                     f"area already exists; retry identical submission with --request-id {definition.get('submission_id', 'ORIGINAL_ID')}"
@@ -75,21 +67,21 @@ class WorkflowService(SessionService):
             if (
                 not request_id
                 or definition.get("submission_id") != request_id
-                or any(normalized.get(k) != v for k, v in expected.items())
-                or (job_id is not None and definition.get("task", {}).get("id") != job_id)
-                or definition.get("task", {}).get("title") != title
-                or definition.get("task", {}).get("instructions") != instructions
+                or any(definition.get(k) != v for k, v in expected.items())
+                or (job_id is not None and definition.get("job", {}).get("id") != job_id)
+                or definition.get("job", {}).get("title") != title
+                or definition.get("job", {}).get("instructions") != instructions
             ):
                 raise ValueError("this worktree already coordinates another instance")
             area.validate()
             area.ensure_room()
         else:
-            task = JobInput(id=job_id or identifier("job"), title=title, instructions=instructions)
+            job = JobInput(id=job_id or identifier("job"), title=title, instructions=instructions)
             submission_id = request_id or identifier("request")
             definition = {
                 "template": snapshot,
                 "bindings": bindings,
-                "task": task.model_dump(),
+                "job": job.model_dump(),
                 "run_id": identifier("run"),
                 "submission_id": submission_id,
                 "base_commit": git(root, "rev-parse", "HEAD"),
@@ -138,7 +130,7 @@ class WorkflowEngine(SessionEngine):
         """Load the immutable template; never reload the caller's mutable source file."""
         super().__init__(area, terminal, **kwargs)
         self.definition = area.data["definition"]
-        self.template = WorkflowTemplate.from_snapshot(self.definition["template"])
+        self.template = WorkflowTemplate.model_validate(self.definition["template"])
 
     def active(self) -> dict:
         """Select the current visit from committed run state."""
@@ -159,12 +151,23 @@ class WorkflowEngine(SessionEngine):
             return
         task = self.template.tasks[destination]
         role = task.role
+        previous_session = next(
+            (
+                s
+                for s in self.state["sessions"].values()
+                if s["participant"] == self.definition["bindings"][role]
+            ),
+            None,
+        )
         execution = TaskExecution(
             id=identifier("execution"),
             task=destination,
             participant=self.definition["bindings"][role],
+            fresh_after_native_id=previous_session["native_id"]
+            if task.fresh_session and previous_session
+            else None,
             input=incoming,
-        ).model_dump(by_alias=True)
+        ).model_dump()
         run["executions"].append(execution)
         run["active"] = execution["id"]
 
@@ -172,16 +175,16 @@ class WorkflowEngine(SessionEngine):
         """Apply the same job/task/specialist budgets to transitions and explicit retries."""
         executions = self.state["run"]["executions"]
         task = self.template.tasks[task_name]
-        if len(executions) >= self.template.limits.max_step_executions:
-            return "step execution limit reached"
+        if len(executions) >= self.template.limits.max_task_executions:
+            return "task execution limit reached"
         if (
             task.max_executions is not None
-            and sum(e["step"] == task_name for e in executions) >= task.max_executions
+            and sum(e["task"] == task_name for e in executions) >= task.max_executions
         ):
             return f"task execution limit reached: {task_name}"
         if (
             task.optional
-            and sum(self.template.tasks[e["step"]].optional for e in executions)
+            and sum(self.template.tasks[e["task"]].optional for e in executions)
             >= self.template.limits.max_specialist_executions
         ):
             return "specialist execution limit reached"
@@ -189,7 +192,7 @@ class WorkflowEngine(SessionEngine):
 
     def _specialists(self, execution: dict, payload: dict, outcome: str) -> list[str]:
         """Validate discretionary and size-triggered reviews before accepting an outcome."""
-        task = self.template.tasks[execution["step"]]
+        task = self.template.tasks[execution["task"]]
         selected = payload.get("specialists") or []
         if not isinstance(selected, list) or any(not isinstance(name, str) for name in selected):
             raise ValueError("specialists must be a list of task names")
@@ -218,7 +221,7 @@ class WorkflowEngine(SessionEngine):
                 for name, threshold in task.specialist_above_lines.items()
                 if lines > threshold and name not in selected
             )
-        used = sum(self.template.tasks[e["step"]].optional for e in self.state["run"]["executions"])
+        used = sum(self.template.tasks[e["task"]].optional for e in self.state["run"]["executions"])
         if used + len(selected) > self.template.limits.max_specialist_executions:
             raise ValueError("specialist execution limit reached")
         return selected
@@ -233,7 +236,7 @@ class WorkflowEngine(SessionEngine):
     ) -> None:
         """Run bounded specialists sequentially, retaining findings and the normal continuation."""
         context = execution["input"].get("specialist_context")
-        if self.template.tasks[execution["step"]].optional:
+        if self.template.tasks[execution["task"]].optional:
             if not context:
                 raise ValueError("specialist task has no recorded continuation")
             reviews = [*context.get("reviews", []), incoming.copy()]
@@ -319,9 +322,7 @@ class WorkflowEngine(SessionEngine):
         session = self.state["sessions"].get(execution["session_id"])
         if session and session["status"] != "stopped":
             raise ValueError("explicitly stop the assigned session before retrying work")
-        reason_limit = self._execution_limit(execution["step"])
-        if reason_limit:
-            raise ValueError(reason_limit + "; cancel or use a fresh worktree")
+        destination = execution["task"]
         incoming = {**execution["input"], "retry_of": execution["id"], "retry_reason": reason}
         if incoming.get("artifact"):
             incoming.update(
@@ -332,11 +333,27 @@ class WorkflowEngine(SessionEngine):
                 summary=reason,
             )
             incoming["artifact"] = capture(self.area, self.state["run"]["id"], execution["id"])
+            if self.template.tasks[execution["task"]].optional:
+                before_version = read_record(
+                    self.area.room.root / "artifacts" / f"{incoming['previous_artifact']}.json"
+                )["version"]
+                after_version = read_record(
+                    self.area.room.root / "artifacts" / f"{incoming['artifact']}.json"
+                )["version"]
+                if before_version != after_version:
+                    destination = self.template.tasks[execution["task"]].transitions[
+                        "changes_requested"
+                    ]
+                    incoming["invalidated_specialist_context"] = incoming.pop("specialist_context")
+                    incoming.pop("reviews", None)
+        reason_limit = self._execution_limit(destination)
+        if reason_limit:
+            raise ValueError(reason_limit + "; cancel or use a fresh worktree")
         execution["status"] = "abandoned"
         if session:
             session["work"] = None
             session["recovering"] = False
-        self._visit(execution["step"], incoming)
+        self._visit(destination, incoming)
 
     def apply(self, kind: str, payload: dict) -> None:
         """Validate workflow operations alongside existing session operations."""
@@ -360,8 +377,8 @@ class WorkflowEngine(SessionEngine):
             if self.state.get("run"):
                 raise ValueError("workflow is already started")
             self.state["run"] = WorkflowRun(
-                id=self.definition["run_id"], job_id=self.definition["task"]["id"]
-            ).model_dump(by_alias=True)
+                id=self.definition["run_id"], job_id=self.definition["job"]["id"]
+            ).model_dump()
             self._visit(self.template.entry, {})
             return
         if kind in {"workflow-ack", "workflow-report"}:
@@ -387,17 +404,17 @@ class WorkflowEngine(SessionEngine):
             outcome, summary = payload.get("outcome"), payload.get("summary")
             if not isinstance(outcome, str) or not isinstance(summary, str) or len(summary) > 16384:
                 raise ValueError("outcome and a bounded summary are required")
-            destination = transition(self.template, execution["step"], outcome)
+            destination = transition(self.template, execution["task"], outcome)
             specialists = self._specialists(execution, payload, outcome)
             pr = (
                 PullRequest.model_validate(payload["pr"]).model_dump()
                 if payload.get("pr") is not None
                 else None
             )
-            if outcome in self.template.tasks[execution["step"]].requires_pr and pr is None:
+            if outcome in self.template.tasks[execution["task"]].requires_pr and pr is None:
                 raise ValueError("this task requires repository-qualified PR metadata")
             artifact = capture(self.area, self.state["run"]["id"], execution["id"])
-            if self.template.steps[execution["step"]].checks_input(outcome) and execution[
+            if self.template.tasks[execution["task"]].checks_input(outcome) and execution[
                 "input"
             ].get("artifact"):
                 captured = read_record(self.area.room.root / "artifacts" / f"{artifact}.json")
@@ -452,24 +469,23 @@ class WorkflowEngine(SessionEngine):
             super().apply("launch", {"participant": execution["participant"]})
             self.commit("role-launch-planned", {"participant": execution["participant"]})
             return
-        task = self.template.tasks[execution["step"]]
+        task = self.template.tasks[execution["task"]]
         if (
             role["kind"] == "agent"
             and session
             and task.fresh_session
             and not execution["message"]
-            and session["work"]
+            and execution.get("fresh_after_native_id") is not None
+            and session["native_id"] == execution["fresh_after_native_id"]
         ):
-            generation = execution.get("reset_generation")
-            if generation is None and session["status"] == "ready":
+            if session["status"] == "ready":
                 execution["reset_generation"] = session["generation"] + 1
                 super().apply("stop", {"session_id": session["id"]})
                 self.commit("fresh-review-stop-planned", {"execution_id": execution["id"]})
                 return
-            if generation is not None and session["generation"] < generation:
-                if session["status"] == "stopped":
-                    super().apply("replace", {"session_id": session["id"]})
-                    self.commit("fresh-review-session-planned", {"execution_id": execution["id"]})
+            if execution.get("reset_generation") is not None and session["status"] == "stopped":
+                super().apply("replace", {"session_id": session["id"]})
+                self.commit("fresh-review-session-planned", {"execution_id": execution["id"]})
                 return
         if role["kind"] == "agent" and (not session["ready"] or session["status"] != "ready"):
             return
@@ -488,13 +504,14 @@ class WorkflowEngine(SessionEngine):
                 arguments += f" --input-artifact {execution['input']['artifact']}"
             body = (
                 f"Area: {self.area.data['id']}\nRun: {run['id']}\nWork ID: {execution['id']}\n"
-                f"Role instructions: {role['instructions']}\nJob goal: {runtime_reference(self.area.root)}/task.md\n"
-                f"Task: {execution['step']}\nTask instructions: {self.template.tasks[execution['step']].instructions}\n"
+                f"Role instructions: {role['instructions']}\nJob goal: {runtime_reference(self.area.root)}/job.md\n"
+                f"Review records directory: {runtime_reference(self.area.root)}/reviews\n"
+                f"Task: {execution['task']}\nTask instructions: {self.template.tasks[execution['task']].instructions}\n"
                 f"Input: {json.dumps(execution['input'])}\n"
-                f"Input verification policy: all outcomes={self.template.steps[execution['step']].verify_input}; named outcomes={self.template.steps[execution['step']].verified_outcomes}\n"
+                f"Input verification policy: all outcomes={self.template.tasks[execution['task']].verify_input}; named outcomes={self.template.tasks[execution['task']].verified_outcomes}\n"
                 f"Optional specialists: {task.specialist_tasks}; use report --specialist TASK --specialist-reason REASON with an approved outcome.\n"
                 f"PR metadata required: {task.requires_pr}; report --pr-number N --pr-repository OWNER/REPO [--pr-url URL].\n"
-                f"Allowed outcomes: {', '.join(self.template.steps[execution['step']].transitions)}\n"
+                f"Allowed outcomes: {', '.join(self.template.tasks[execution['task']].transitions)}\n"
                 f"Before acting, run: {command} acknowledge {arguments}\n"
                 f"Report with: {command} report {arguments} --outcome OUTCOME --summary SUMMARY\n"
                 "After native resume use your CURRENT generation in these commands. "

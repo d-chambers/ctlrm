@@ -168,7 +168,7 @@ class Journal:
             if event.get("previous") != previous or digest(event) != checksum:
                 raise ValueError(f"corrupted accepted history: {path}")
             try:
-                state = event["state"] if "state" in event else patched(state, event["changes"])
+                state = patched(state, event["changes"])
             except (KeyError, TypeError, IndexError) as error:
                 raise ValueError(f"invalid event changes: {path}") from error
             if not isinstance(state, dict):
@@ -187,7 +187,7 @@ class Journal:
             "at": now(),
             "kind": kind,
             "detail": detail or {},
-            **({"state": state} if sequence == 0 else {"changes": changes(prior, state)}),
+            "changes": changes(prior, state),
         }
         event["checksum"] = digest(event)
         publish(self.root / "events" / f"{sequence + 1:012d}.json", event)

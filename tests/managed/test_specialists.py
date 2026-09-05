@@ -68,7 +68,7 @@ def report(engine, client, outcome, **extra):
     engine.tick()
     request = client.request(
         "workflow-report",
-        {**owner, "outcome": outcome, "summary": "Findings for " + item["step"], **extra},
+        {**owner, "outcome": outcome, "summary": "Findings for " + item["task"], **extra},
     )
     engine.tick()
     return engine.state["requests"][request]
@@ -91,15 +91,15 @@ class TestSpecialistExecution:
                 specialist_reason="Large locking change",
             )
             assert result["status"] == "accepted"
-            assert engine.active()["step"] == "performance"
+            assert engine.active()["task"] == "performance"
             first = engine.active()["id"]
             engine = WorkflowEngine(client.area, FakeTerminal())
             engine.tick()
             assert engine.active()["id"] == first
             assert report(engine, client, "approved")["status"] == "accepted"
-            assert engine.active()["step"] == "concurrency"
+            assert engine.active()["task"] == "concurrency"
             assert report(engine, client, "approved")["status"] == "accepted"
-            assert engine.active()["step"] == "finish"
+            assert engine.active()["task"] == "finish"
             assert len(engine.active()["input"]["reviews"]) == 2
             assert report(engine, client, "done")["status"] == "accepted"
             assert engine.state["run"]["status"] == "completed"
@@ -127,7 +127,7 @@ class TestSpecialistExecution:
                 == "accepted"
             )
             assert report(engine, client, "changes_requested")["status"] == "accepted"
-            assert engine.active()["step"] == "fix"
+            assert engine.active()["task"] == "fix"
             assert engine.active()["input"]["reviews"][0]["summary"] == "Findings for performance"
             assert report(engine, client, "completed")["status"] == "accepted"
             assert (
@@ -152,7 +152,7 @@ class TestSpecialistExecution:
             report(engine, client, "approved", specialists=["performance"], specialist_reason="x")
             (repository / "source.txt").write_text("changed during review\n")
             assert report(engine, client, "approved")["status"] == "rejected"
-            assert engine.active()["step"] == "performance"
+            assert engine.active()["task"] == "performance"
 
     def test_size_trigger_and_pr(self, repository, specialist_template) -> None:
         """Tracked change-size thresholds request only named tasks and PR metadata is validated."""
@@ -164,9 +164,9 @@ class TestSpecialistExecution:
         with client.area.journal.writer():
             engine = WorkflowEngine(client.area, FakeTerminal())
             assert report(engine, client, "approved")["status"] == "accepted"
-            assert engine.active()["step"] == "performance"
+            assert engine.active()["task"] == "performance"
             assert report(engine, client, "approved")["status"] == "accepted"
-            assert engine.active()["step"] == "finish"
+            assert engine.active()["task"] == "finish"
             assert report(engine, client, "done")["status"] == "rejected"
             assert (
                 report(engine, client, "done", pr={"number": 42, "repository": "owner/repo"})[
@@ -219,3 +219,49 @@ class TestSpecialistRetryBudget:
             assert engine.state["requests"][request]["status"] == "rejected"
             assert engine.active()["id"] == execution_id
             assert report(engine, client, "approved")["status"] == "accepted"
+
+
+class TestSpecialistVersionRetry:
+    """A changed review input invalidates the whole specialty approval continuation."""
+
+    def test_changed_retry_returns_to_fix(self, repository, specialist_template) -> None:
+        """Earlier approvals cannot authorize a changed version through a later specialist retry."""
+        client, _ = WorkflowService.submit(repository, specialist_template, "Goal", "Inspect")
+        client.join("owner")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            report(
+                engine,
+                client,
+                "approved",
+                specialists=["performance", "concurrency"],
+                specialist_reason="x",
+            )
+            report(engine, client, "approved")
+            assert engine.active()["task"] == "concurrency"
+            (repository / "source.txt").write_text("new version\n")
+            request = client.request(
+                "workflow-retry",
+                {"execution_id": engine.active()["id"], "reason": "Review changed code"},
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "accepted"
+            assert engine.active()["task"] == "fix"
+            assert "specialist_context" not in engine.active()["input"]
+            assert "invalidated_specialist_context" in engine.active()["input"]
+
+    def test_local_review_output(self, repository, specialist_template) -> None:
+        """The assignment's review directory is excluded even for a local workflow."""
+        from ctlrm.managed.artifacts import fingerprint
+
+        client, _ = WorkflowService.submit(repository, specialist_template, "Goal", "Inspect")
+        client.join("owner")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            assert "Review records directory: .ctlrm/reviews" in engine.active()["message"]["body"]
+            before = fingerprint(repository)
+            reviews = client.area.room.root / "reviews"
+            reviews.mkdir()
+            (reviews / "findings.md").write_text("No findings.\n")
+            assert fingerprint(repository) == before

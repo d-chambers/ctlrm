@@ -48,7 +48,6 @@ def session_start(
     participant: str = "agent",
     role: str = "worker",
     instructions: str = "Work on user prompts.",
-    adopt: bool = False,
     request_id: str | None = None,
 ) -> None:
     """Create a standalone coordination area and launch one background agent."""
@@ -78,7 +77,6 @@ def session_start(
             roles=roles,
             profiles={"agent": config.model_dump()},
             prompt=instructions,
-            adopt=adopt,
         )
         request = SessionService(area).request("launch", {"participant": participant}, request_id)
         supervisor.start(area)

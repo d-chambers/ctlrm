@@ -2,7 +2,7 @@ schema_version: 1
 name: ship
 entry: implement
 limits:
-  max_step_executions: 60
+  max_task_executions: 60
   max_specialist_executions: 6
 profiles:
   coder:
@@ -20,19 +20,19 @@ roles:
   writer:
     kind: agent
     profile: coder
-    instructions: Follow repository AGENTS.md. Work only in this job worktree. Preserve user changes. Never weaken checks to make them pass. Keep review files under .scratch/ctlrm/reviews. Do not merge the PR.
+    instructions: Follow repository AGENTS.md. Work only in this job worktree. Preserve user changes. Never weaken checks to make them pass. Keep review files under the review records directory named in each assignment. Do not merge the PR.
   internal_reviewer:
     kind: agent
     profile: coder
-    instructions: Review independently. Read the current diff and surrounding callers. Do not edit code. Give concrete failure scenarios and file/line references. Save your findings under .scratch/ctlrm/reviews and report a summary.
+    instructions: Review independently. Read the current diff and surrounding callers. Do not edit code. Give concrete failure scenarios and file/line references. Save your findings under the review records directory named in the assignment and report a summary.
   counterpart_reviewer:
     kind: agent
     profile: counterpart
-    instructions: Review independently from the implementation context. Do not edit code. Check correctness, tests, and compatibility. Save findings under .scratch/ctlrm/reviews. A failed or unavailable review is not approval.
+    instructions: Review independently from the implementation context. Do not edit code. Check correctness, tests, and compatibility. Save findings under the review records directory named in the assignment. A failed or unavailable review is not approval.
   specialist:
     kind: agent
     profile: coder
-    instructions: Review only the assigned lens against the exact input artifact. Do not edit code. Report concrete findings and save them under .scratch/ctlrm/reviews.
+    instructions: Review only the assigned lens against the exact input artifact. Do not edit code. Report concrete findings and save them under the review records directory named in the assignment.
 tasks:
   implement:
     role: writer
@@ -76,6 +76,6 @@ tasks:
     transitions: {completed: check_pr, blocked: 'terminal:failed'}
   check_pr:
     role: writer
-    instructions: Inspect all CI checks and every unresolved inline review thread, including bot reviews. Wait for pending checks and late reviews within a bounded observation period; do not claim success for absent or canceled checks. Fixes require reporting changes_requested so the workflow repeats implementation and reviews. Reply to non-actionable threads with a reason. Report approved only when required checks are green and no review thread is unanswered or unresolved. Report blocked when external conditions prevent progress. Include PR identity in the summary. Do not merge.
+    instructions: Inspect all CI checks and every unresolved inline review thread, including bot reviews. Wait for pending checks and late reviews within a bounded observation period; do not claim success for absent or canceled checks. Fixes require reporting changes_requested so the workflow repeats implementation and reviews. Reply to non-actionable threads with a reason. Check the PR is still open and currently mergeable against its target branch. Wait when mergeability is unknown; route conflicts through changes_requested and renewed reviews. Report approved only when the PR is mergeable, required checks are green and no review thread is unanswered or unresolved. Report blocked when external conditions prevent progress. Include PR identity in the summary. Do not merge.
     verify_input: true
     transitions: {approved: 'terminal:completed', changes_requested: implement, blocked: 'terminal:failed'}

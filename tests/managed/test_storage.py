@@ -41,7 +41,7 @@ class TestJournal:
             area.journal.commit(area.journal.replay()[0], "initial")
         path = area.room.root / "events/000000000001.json"
         data = json.loads(path.read_text())
-        data["state"]["paused"] = "tampered"
+        data["kind"] = "tampered"
         path.write_text(json.dumps(data))
         with pytest.raises(ValueError, match="corrupted"):
             area.journal.replay()

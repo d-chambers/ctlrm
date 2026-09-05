@@ -267,7 +267,7 @@ class ProjectStore:
                         raise ValueError("existing worktree branch does not match")
                     launch["branch"] = ref.removeprefix("refs/heads/")
                     if (resolved / ".ctlrm").exists() and any((resolved / ".ctlrm").iterdir()):
-                        raise ValueError("existing coordination area cannot be implicitly adopted")
+                        raise ValueError("worktree already contains another coordination area")
                 elif target.exists():
                     raise ValueError("new job worktree path already exists")
                 git(Path(project.codebase), "check-ref-format", "--branch", launch["branch"])
@@ -343,7 +343,7 @@ class ProjectStore:
         if local.is_symlink():
             raise ValueError("coordination runtime must not be a symlink")
         if local.exists() and any(p.name != "location.json" for p in local.iterdir()):
-            raise ValueError("existing coordination area cannot be implicitly adopted")
+            raise ValueError("worktree already contains another coordination area")
         locator = local / "location.json"
         expected = {"schema_version": 1, "worktree": str(root), "job_directory": str(job)}
         if locator.exists() and read_record(locator) != expected:

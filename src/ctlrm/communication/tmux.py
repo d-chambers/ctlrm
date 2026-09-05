@@ -80,7 +80,7 @@ class CommandRunner(Protocol):
 
 
 class SubprocessCommandRunner:
-    """Legacy command interface backed by libtmux; managed sessions use TmuxTerminal."""
+    """Execute the prototype GUI terminal commands through libtmux."""
 
     @_translate_errors
     def run(self, command: TmuxCommand) -> str:

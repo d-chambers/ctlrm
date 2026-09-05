@@ -12,7 +12,7 @@ HUMAN = {
     "entry": "approve",
     "profiles": {},
     "roles": {"owner": {"kind": "human"}},
-    "steps": {
+    "tasks": {
         "approve": {
             "role": "owner",
             "verify_input": True,
@@ -26,7 +26,7 @@ class TestTemplate:
     """A graph must have explicit outcomes, valid bindings, and a reachable exit."""
 
     def test_single_human(self) -> None:
-        """A one-step workflow needs neither a synthetic agent nor a profile."""
+        """A one-task workflow needs neither a synthetic agent nor a profile."""
         assert WorkflowTemplate.model_validate(HUMAN).entry == "approve"
 
     @pytest.mark.parametrize("change", ["entry", "destination", "role", "unreachable", "no_exit"])
@@ -36,13 +36,13 @@ class TestTemplate:
         if change == "entry":
             data["entry"] = "missing"
         elif change == "destination":
-            data["steps"]["approve"]["transitions"]["approved"] = "missing"
+            data["tasks"]["approve"]["transitions"]["approved"] = "missing"
         elif change == "role":
-            data["steps"]["approve"]["role"] = "missing"
+            data["tasks"]["approve"]["role"] = "missing"
         elif change == "unreachable":
-            data["steps"]["unused"] = copy.deepcopy(data["steps"]["approve"])
+            data["tasks"]["unused"] = copy.deepcopy(data["tasks"]["approve"])
         else:
-            data["steps"]["approve"]["transitions"]["approved"] = "approve"
+            data["tasks"]["approve"]["transitions"]["approved"] = "approve"
         with pytest.raises(ValueError):
             WorkflowTemplate.model_validate(data)
 
@@ -54,71 +54,27 @@ class TestTemplate:
 
 
 class TestTrapCycle:
-    """Every reachable step must retain a possible route to a terminal."""
+    """Every reachable task must retain a possible route to a terminal."""
 
     def test_inescapable_branch(self) -> None:
         """A terminal on one branch cannot validate another branch that loops forever."""
         data = copy.deepcopy(HUMAN)
-        data["steps"]["approve"]["transitions"]["retry"] = "trap"
-        data["steps"]["trap"] = {
+        data["tasks"]["approve"]["transitions"]["retry"] = "trap"
+        data["tasks"]["trap"] = {
             "role": "owner",
             "verify_input": True,
             "transitions": {"again": "trap"},
         }
-        with pytest.raises(ValueError, match="every step"):
+        with pytest.raises(ValueError, match="every task"):
             WorkflowTemplate.model_validate(data)
 
 
 class TestExplicitVerificationPolicy:
-    """New template policy is explicit while earlier immutable snapshots retain their meaning."""
+    """Every task declares its input verification policy explicitly."""
 
     def test_policy_required(self) -> None:
         """New source templates cannot silently infer review policy from an outcome name."""
         data = copy.deepcopy(HUMAN)
-        del data["steps"]["approve"]["verify_input"]
+        del data["tasks"]["approve"]["verify_input"]
         with pytest.raises(ValueError, match="verify_input"):
             WorkflowTemplate.model_validate(data)
-        legacy = WorkflowTemplate.from_snapshot(data)
-        assert legacy.steps["approve"].checks_input("approved")
-        assert not legacy.steps["approve"].checks_input("changes_requested")
-
-
-class TestTaskTerminology:
-    """Generic definitions and concrete executions preserve the existing journal format."""
-
-    def test_task_instructions_and_legacy(self) -> None:
-        """Both YAML spellings load while new snapshots expose one task map."""
-        data = copy.deepcopy(HUMAN)
-        data["schema_version"] = 1
-        data["tasks"] = data.pop("steps")
-        data["tasks"]["approve"]["instructions"] = "Review the blast radius of the job changes."
-        template = WorkflowTemplate.model_validate(data)
-        assert template.tasks["approve"].instructions.startswith("Review the blast radius")
-        assert template.tasks is template.steps
-        assert "steps" not in template.model_dump()
-        assert WorkflowTemplate.from_snapshot(template.model_dump()) == template
-
-    def test_execution_replay(self) -> None:
-        """Renamed public models still read and write historical committed keys."""
-        from ctlrm.runtime.workflows import TaskExecution, WorkflowRun
-
-        execution = TaskExecution.model_validate(
-            {"id": "e1", "step": "review", "participant": "reviewer"}
-        )
-        assert execution.task == "review"
-        assert execution.session_id is None
-        assert execution.model_dump(by_alias=True)["step"] == "review"
-        run = WorkflowRun.model_validate({"id": "r1", "task_id": "old-job"})
-        assert run.job_id == "old-job"
-        assert run.model_dump(by_alias=True)["task_id"] == "old-job"
-
-
-class TestLegacyDefault:
-    """Identical pre-upgrade sources retain their submission identity."""
-
-    def test_unversioned_template(self) -> None:
-        """Omitted schema versions still mean v1 for idempotent submission retries."""
-        data = copy.deepcopy(HUMAN)
-        del data["schema_version"]
-        legacy = WorkflowTemplate.from_snapshot(HUMAN)
-        assert WorkflowTemplate.model_validate(data).model_dump() == legacy.model_dump()

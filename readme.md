@@ -18,7 +18,7 @@ An **execution** records the task's inputs, participant/session assignment, stat
 
 Projects can contain dependent jobs, each with an immutable workflow snapshot and its own worktree/branch. PR identity belongs to the job: assign a repository and PR number, then search by number with an optional repository filter. Workflow completion, PR merge, project completion, and archival are distinct milestones.
 
-The OS-specific user data directory owns durable project and job records. Each job worktree exposes its records through `.scratch/ctlrm`, a symlink into the central job directory. Existing worktree-local `.ctlrm` runs remain readable. See [project/job commands, storage, and PR lookup](docs/projects.md) and the [backend implementation plan](docs/superpowers/plans/2026-09-05-project-jobs.md). Workflows can request bounded specialist-review tasks from a predefined allowlist. The [ship workflow](examples/ship.yaml) uses review lenses, fresh reviewer sessions, PR publication, and CI/review handling; the [single-agent workflow](examples/single-agent.yaml) keeps simple jobs small. Project archival is the remaining backend step before GUI design resumes.
+The OS-specific user data directory owns durable project and job records. Each job worktree exposes its records through `.scratch/ctlrm`, a symlink into the central job directory. See [project/job commands, storage, and PR lookup](docs/projects.md) and the [backend implementation plan](docs/superpowers/plans/2026-09-05-project-jobs.md). Workflows can request bounded specialist-review tasks from a predefined allowlist. The [ship workflow](examples/ship.yaml) uses review lenses, fresh reviewer sessions, PR publication, and CI/review handling; the [single-agent workflow](examples/single-agent.yaml) keeps simple jobs small. Project archival is the remaining backend step before GUI design resumes.
 
 ## Development
 
@@ -47,4 +47,4 @@ ctlrm --root /path/to/worktree send --from coordinator --to reviewer --title Rev
 ctlrm --root /path/to/worktree inbox --participant reviewer
 ```
 
-Restart commands in legacy room signatures are stored only; use managed sessions for executable recovery. Room identity is cooperative rather than authenticated. All participants need appropriate shared filesystem permissions.
+Restart commands in room signatures are stored only; use managed sessions for executable recovery. Room identity is cooperative rather than authenticated. All participants need appropriate shared filesystem permissions.

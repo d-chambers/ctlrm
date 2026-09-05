@@ -15,9 +15,9 @@ def transition(workflow: WorkflowTemplate, step: str, outcome: str) -> str:
     outcome
         Participant's structured business outcome.
     """
-    if step not in workflow.steps:
+    if step not in workflow.tasks:
         raise ValueError("unknown active step")
-    destination = workflow.steps[step].transitions.get(outcome)
+    destination = workflow.tasks[step].transitions.get(outcome)
     if destination is None:
         raise ValueError(f"unknown outcome {outcome!r} for step {step!r}")
     return destination

@@ -1,20 +1,16 @@
-"""Resolve legacy worktree storage or an explicitly bound central job runtime."""
+"""Resolve local coordination storage or a centrally bound job runtime."""
 
 from pathlib import Path
 
 
-def runtime_path(root: Path, *, managed: bool = True) -> Path:
+def runtime_path(root: Path) -> Path:
     """Resolve a bounded locator without treating arbitrary symlinks as runtime roots."""
     local = root / ".ctlrm"
     if local.is_symlink():
-        if managed:
-            raise ValueError("coordination runtime must not be a symlink")
-        return local
+        raise ValueError("coordination runtime must not be a symlink")
     locator = local / "location.json"
     if not locator.exists():
-        if (root / ".scratch/ctlrm").is_symlink() and (
-            managed or (root / ".scratch/ctlrm/job.json").is_file()
-        ):
+        if (root / ".scratch/ctlrm").is_symlink():
             raise ValueError("central runtime locator is missing; retry job start to repair")
         return local
     if locator.is_symlink() or locator.stat().st_size > 8192:

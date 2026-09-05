@@ -5,12 +5,39 @@
   "initial_response": "```json\n{\"ready\": true, \"session_id\": \"ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd\", \"resume_argv\": [\"claude\", \"--resume\", \"ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd\"]}\n```",
   "resumed_response": "```json\n{\"ready\": true, \"session_id\": \"ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd\", \"remembered_token\": \"59267cc0e92f4473b979a93928c74110\"}\n```",
   "transport": "interactive terminal",
-  "termination": "SIGKILL provider child after completed first turn",
+  "termination": "SIGKILL provider child after complete readiness assistant text persisted",
   "same_session_id": true,
   "context_retained": true,
   "provider_version": "2.1.261",
   "tmux_version": "3.4",
   "libtmux_version": "0.62.0",
   "initial_prompt_included_token": true,
-  "resume_prompt_included_token": false
+  "resume_prompt_included_token": false,
+  "recorded_at": "2026-09-05T06:05:45.834630+00:00",
+  "launch_argv": [
+    "claude",
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--permission-mode",
+    "plan",
+    "--session-id",
+    "ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd",
+    "Bounded recovery test. Your native session id is ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd. Privately remember token 59267cc0e92f4473b979a93928c74110. Reply only JSON with ready=true, session_id, resume_argv for this exact session. Do not use tools."
+  ],
+  "resume_argv": [
+    "claude",
+    "--tools",
+    "",
+    "--strict-mcp-config",
+    "--permission-mode",
+    "plan",
+    "--resume",
+    "ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd",
+    "Status reconciliation only. Reply only JSON with ready=true, session_id and remembered_token from our prior conversation. Do not use tools or repeat work."
+  ],
+  "permission_mode": "plan",
+  "tools": [],
+  "provider_environment_names": [],
+  "native_state_context": "~/.claude"
 }

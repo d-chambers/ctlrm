@@ -31,21 +31,22 @@ Here `''` denotes one empty argument, disabling tools for this bounded probe. Pr
 
 Each input line was a JSON object with `type: user` and a `message` containing `role: user` and text `content`. The first prompt supplied a random conversation token plus the allocated session ID and requested readiness and restart instructions. The agent returned `ready: true`, the supplied session ID, and `resume_argv` referring to that exact ID. A successful provider result event recorded the same native session ID.
 
-After that first turn completed, the probe read the managed pane PID, queried its direct children with `ps -o pid= --ppid <pane-pid>`, asserted exactly one provider child, and identified that child and sent SIGKILL to that child while it awaited more input. It started another managed terminal using `--resume` and requested status reconciliation and the remembered token without including that token in the resume prompt. The response returned `ready: true` and the exact original token; the result event retained the original session ID. Both provider result events reported success. The isolated tmux server was then stopped.
+After that first turn completed, the probe read the managed pane PID, queried its direct children with `ps -o pid= --ppid <pane-pid>`, asserted exactly one provider child, and sent SIGKILL to that verified child while it awaited more input. It started another managed terminal using `--resume` and requested status reconciliation and the remembered token without including that token in the resume prompt. The response returned `ready: true` and the exact original token; the result event retained the original session ID. Both provider result events reported success. The isolated tmux server was then stopped.
 
-This is evidence of recovery after a completed turn followed by unexpected process death. It does not prove recovery of an unfinished tool call, exactly-once effects, missing state files, changed credentials, or host reboot. Those cases require the planned uncertain-work and replacement paths.
+The streamed probe establishes recovery after a completed result; the interactive probe establishes recovery after a persisted readiness response. Neither proves recovery of an unfinished tool call, tools-enabled execution, other permission modes, exactly-once effects, missing state files, changed credentials, or host reboot. Those cases require the planned uncertain-work and replacement paths.
 
 ## Adapter implications
 
 - Allocate or discover the native ID before declaring managed readiness; require the agent's acknowledgment and resume instructions.
 - Preserve the native state directory/provider context and the transport options alongside executable arguments. An absent session or unavailable provider context is a recovery failure, never evidence that a new conversation successfully resumed.
 - Readiness must refer to the current managed generation as well as the native session ID.
+- A first-launch workspace trust dialog can block interactive startup. Surface it as waiting for user trust, preserve the pane for attachment, and do not declare readiness or silently approve unfamiliar worktrees.
 - Supervise the provider process, not just the pane. The successful probe retained a shell parent; direct `exec` startup attempts ended with SIGHUP in this environment and are not the validated launch path. Diagnose that difference in the terminal/provider adapter implementation rather than assuming both forms work.
 - Use libtmux with an isolated/configured server and an explicit shell wrapper for the verified path. In the probe, the shell and provider were distinct processes, so the shell surviving provider death did not count as recovery.
 - Resume with a status query for the prior work ID. The token test establishes context retention, not whether arbitrary interrupted work already took effect.
 - Keep full machine-specific logs under temporary `.scratch/`. A small committed evidence excerpt records matching IDs and the burned, disposable test token without credentials.
 
-## Reproduction checklist
+## Streamed reproduction checklist
 
 1. Verify provider-related environment names without printing their values and preserve the same native state context for both launches. The observed run had none set; do not silently change authentication settings to reproduce it. Create a disposable linked worktree and isolated libtmux server; open an explicit shell pane and retain the FIFO's writer endpoint.
 2. Launch the initial argument vector with a new UUID. Supply an unpredictable token and ask for a recovery acknowledgment.
@@ -55,8 +56,18 @@ This is evidence of recovery after a completed turn followed by unexpected proce
 
 ## Verified interactive terminal path
 
-The second probe used an explicit `/bin/sh` pane on an isolated libtmux server and launched `claude --tools '' --strict-mcp-config --permission-mode plan --session-id <uuid> <bootstrap-prompt>`. On resume it replaced `--session-id` with `--resume` and supplied only a status-reconciliation prompt. The initial prompt supplied a fresh nonce and the controller-allocated native ID; the agent acknowledged that ID and supplied the matching resume arguments. It was then killed as the shell's verified sole provider child after its completed response.
+The second probe used an explicit `/bin/sh` pane on an isolated libtmux server and launched `claude --tools '' --strict-mcp-config --permission-mode plan --session-id <uuid> <bootstrap-prompt>`. On resume it replaced `--session-id` with `--resume` and supplied only a status-reconciliation prompt. The initial prompt supplied a fresh nonce and the controller-allocated native ID; the agent acknowledged that ID and a resume command for it. The controller retained the profile options separately. The probe waited for a complete assistant text record containing the readiness acknowledgment in that session's transcript, then killed the shell's verified sole provider child. It did not use an inferred terminal prompt as a workflow-completion signal. On resume it read another assistant text record containing readiness, the same ID, and the token.
 
 The resumed interactive agent returned the same native ID and the earlier nonce, which was not present in its new prompt. The probe inspected only the generated session's transcript and captured pane output; it did not inspect unrelated conversations. The renderer reported a fallback to its classic interactive interface, so this establishes interactive terminal operation without making a claim about a particular full-screen renderer. A workspace trust prompt was accepted only for the disposable worktree created by the probe; such prompts must remain explicit user actions for real worktrees.
 
-The successful interactive response is retained in [the evidence excerpt](evidence/provider-recovery-2026-09-05.json). The native-state context and exact working directory were unchanged on resume. Moving or deleting the original worktree is outside this proof and must trigger the planned reconciliation behavior. The terminal adapter should use this interactive shell-parent path initially, while the stream interface remains an independently demonstrated option.
+The successful interactive response is retained in [the evidence excerpt](evidence/provider-recovery-2026-09-05.json). The native-state context and exact working directory were unchanged on resume. The observed Claude transcript layout uses a directory encoding the working directory under `~/.claude/projects`, making the original workdir part of the tested lookup context. Moving or deleting the original worktree is outside this proof and must trigger the planned reconciliation behavior. The terminal adapter should use this interactive shell-parent path initially, while the stream interface remains an independently demonstrated option.
+
+## Interactive reproduction checklist
+
+1. Verify the provider environment and create a disposable worktree and isolated libtmux server as above. Start an explicit shell pane; no FIFO is used for this transport.
+2. Launch the interactive vector with a new UUID and a prompt supplying a fresh token, asking for readiness and a resume command. Handle a workspace trust prompt explicitly for this known disposable directory.
+3. Read only the transcript file for that generated UUID. Wait for the complete assistant text record acknowledging readiness and that ID. Find the pane PID, assert exactly one provider child in the process table, and SIGKILL that child. This confirms persistence of the response, not a general workflow-completion detector.
+4. Start another shell pane in the same workdir and invoke the interactive resume vector with the same profile options. Ask for the earlier token without including it in the new prompt.
+5. Read the resumed assistant text from the same native transcript and assert readiness, matching ID, and exact token equality. Shut down only the isolated server.
+
+The [streamed evidence excerpt](evidence/provider-recovery-streamed-2026-09-05.json) retains the independent streamed result. Both evidence files include launch/resume vectors, recorded timestamps, and the intentionally restricted test profile.

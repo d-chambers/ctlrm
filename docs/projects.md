@@ -16,7 +16,7 @@ ctlrm job start --project auth --job core
 
 The central data directory is `$XDG_DATA_HOME/ctlrm` (otherwise `~/.local/share/ctlrm`) on Linux, `~/Library/Application Support/ctlrm` on macOS, and `%LOCALAPPDATA%/ctlrm` on Windows. `CTLRM_DATA_HOME` overrides this with an absolute path. These are storage conventions; managed process supervision still requires the existing Linux/tmux environment.
 
-Project records live under `projects/PROJECT/`; each `jobs/JOB/` owns its job definition and runtime. The worktree contains a small `.ctlrm/location.json` locator and `.scratch/ctlrm` symlink to its central job directory. Existing worktree-local `.ctlrm` areas remain readable and are not silently migrated. Status inspection reads central history even after a worktree disappears. New managed native profiles receive `--add-dir` for their own job directory, preserving the configured tool permission policy and excluding other project/job directories. The link and locator must remain intact while the job runs.
+Project records live under `projects/PROJECT/`; each `jobs/JOB/` owns its job definition and runtime. The worktree contains a small `.ctlrm/location.json` locator and `.scratch/ctlrm` symlink to its central job directory. Standalone sessions and direct workflow submissions store their runtime locally under `.ctlrm`; project jobs use central storage. Status inspection reads central history even after a worktree disappears. New managed native profiles receive `--add-dir` for their own job directory, preserving the configured tool permission policy and excluding other project/job directories. The link and locator must remain intact while the job runs.
 
 Assign a PR after creating a job, then search by number:
 

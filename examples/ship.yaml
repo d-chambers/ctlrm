@@ -1,0 +1,81 @@
+schema_version: 1
+name: ship
+entry: implement
+limits:
+  max_task_executions: 60
+  max_specialist_executions: 6
+profiles:
+  coder:
+    provider: codex
+    executable: codex
+    context: ~/.codex
+    input_mode: native
+    arguments: [--sandbox, workspace-write]
+  counterpart:
+    provider: claude
+    executable: claude
+    context: ~/.claude
+    input_mode: manual
+roles:
+  writer:
+    kind: agent
+    profile: coder
+    instructions: Follow repository AGENTS.md. Work only in this job worktree. Preserve user changes. Never weaken checks to make them pass. Keep review files under the review records directory named in each assignment. Do not merge the PR.
+  internal_reviewer:
+    kind: agent
+    profile: coder
+    instructions: Review independently. Read the current diff and surrounding callers. Do not edit code. Give concrete failure scenarios and file/line references. Save your findings under the review records directory named in the assignment and report a summary.
+  counterpart_reviewer:
+    kind: agent
+    profile: counterpart
+    instructions: Review independently from the implementation context. Do not edit code. Check correctness, tests, and compatibility. Save findings under the review records directory named in the assignment. A failed or unavailable review is not approval.
+  specialist:
+    kind: agent
+    profile: coder
+    instructions: Review only the assigned lens against the exact input artifact. Do not edit code. Report concrete findings and save them under the review records directory named in the assignment.
+tasks:
+  implement:
+    role: writer
+    instructions: Implement the job goal or address the latest review/CI findings. Run the repository's required checks, review your own changes for duplication and simplicity, and commit by explicit paths before reporting. Do not commit scratch files or add attribution trailers. Include exact checks and results. At most three fix rounds are allowed after the first implementation.
+    verify_input: false
+    max_executions: 4
+    transitions: {completed: review_blast_radius, blocked: 'terminal:failed'}
+  review_blast_radius:
+    role: internal_reviewer
+    instructions: Review changed callers, public APIs, serialized formats, defaults, and compatibility. Check whether new tests fail against the old behavior. When complexity warrants it, request an allowed specialist and explain the weakest angle. Changes over 100 tracked added/deleted lines also trigger performance review.
+    verify_input: true
+    fresh_session: true
+    specialist_tasks: [review_performance, review_concurrency]
+    specialist_above_lines: {review_performance: 100}
+    transitions: {approved: review_counterpart, changes_requested: implement, unavailable: 'terminal:failed'}
+  review_performance:
+    role: specialist
+    instructions: Examine algorithmic cost, repeated I/O, memory growth, blocking operations, and realistic large inputs. Explain the workload that demonstrates each finding.
+    verify_input: true
+    optional: true
+    fresh_session: true
+    transitions: {approved: 'terminal:return', changes_requested: implement}
+  review_concurrency:
+    role: specialist
+    instructions: Examine process ownership, locks, replay, idempotency, cancellation, and races. Explain the interleaving that demonstrates each finding.
+    verify_input: true
+    optional: true
+    fresh_session: true
+    transitions: {approved: 'terminal:return', changes_requested: implement}
+  review_counterpart:
+    role: counterpart_reviewer
+    instructions: Review the committed changes for correctness and test gaps. Read the code rather than accepting the implementer's summary. Report approved, changes_requested, or unavailable. Use a separate fresh conversation for this execution.
+    verify_input: true
+    fresh_session: true
+    transitions: {approved: publish_pr, changes_requested: implement, unavailable: 'terminal:failed'}
+  publish_pr:
+    role: writer
+    instructions: Identify the intended remote and target branch from repository instructions. Reuse any PR for this branch. Push the job branch and open or update a ready-for-review PR using its template. Do not force-push or merge. Report the PR number, repository identity, and URL using the structured report flags. Treat command errors as blocked, not success.
+    verify_input: true
+    requires_pr: [completed]
+    transitions: {completed: check_pr, blocked: 'terminal:failed'}
+  check_pr:
+    role: writer
+    instructions: Inspect all CI checks and every unresolved inline review thread, including bot reviews. Wait for pending checks and late reviews within a bounded observation period; do not claim success for absent or canceled checks. Fixes require reporting changes_requested so the workflow repeats implementation and reviews. Reply to non-actionable threads with a reason. Check the PR is still open and currently mergeable against its target branch. Wait when mergeability is unknown; route conflicts through changes_requested and renewed reviews. Report approved only when the PR is mergeable, required checks are green and no review thread is unanswered or unresolved. Report blocked when external conditions prevent progress. Include PR identity in the summary. Do not merge.
+    verify_input: true
+    transitions: {approved: 'terminal:completed', changes_requested: implement, blocked: 'terminal:failed'}

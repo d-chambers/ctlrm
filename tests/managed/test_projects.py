@@ -277,7 +277,7 @@ class TestBindingRecovery:
         client, _ = store.start_job("auth", "a", branch="available")
         assert client.area.data["branch"] == "refs/heads/available"
 
-    def test_legacy_scratch_remains_versioned(self, repository) -> None:
+    def test_local_scratch_remains_versioned(self, repository) -> None:
         """Only a verified central link is excluded from artifact capture."""
         from ctlrm.managed.artifacts import fingerprint
 
@@ -360,7 +360,7 @@ class TestReviewedProjectBoundaries:
         with pytest.raises(ValueError, match="through job start"):
             WorkflowService.submit(root, human_template, "Foreign", "Other")
         client, _ = store.start_job("auth", "a")
-        assert client.area.data["definition"]["task"]["id"] == "a"
+        assert client.area.data["definition"]["job"]["id"] == "a"
 
     def test_corrupt_neighbor_search(self, store, human_template) -> None:
         """An invalid runtime is visible without hiding unrelated PR matches."""
@@ -375,12 +375,38 @@ class TestReviewedProjectBoundaries:
         assert store.find_pr(43)[0]["job"]["id"] == "b"
         assert store.list()[0]["jobs"][0]["status"] == "invalid"
 
-    def test_legacy_symlink_layout(self, repository, tmp_path) -> None:
-        """Non-managed runtime clients retain historical symlink support."""
-        from ctlrm.runtime import ProjectRuntime
 
-        target = tmp_path / "legacy-data"
-        target.mkdir()
-        (repository / ".ctlrm").symlink_to(target, target_is_directory=True)
-        ProjectRuntime(repository).init_participant("worker")
-        assert (target / "participants/worker/inbox").is_dir()
+class TestWorkflowPrReporting:
+    """An agent or human can attach PR metadata through its owned task report."""
+
+    def test_report_is_searchable(self, store, human_template) -> None:
+        """Accepted report metadata feeds central search, with explicit assignments overriding it."""
+        human_template.tasks["work"].requires_pr = ["done"]
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        client.join("owner")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            payload = {
+                "run_id": engine.state["run"]["id"],
+                "execution_id": engine.active()["id"],
+                "participant": "owner",
+            }
+            client.request("workflow-ack", payload)
+            engine.tick()
+            request = client.request(
+                "workflow-report",
+                {
+                    **payload,
+                    "outcome": "done",
+                    "summary": "Published",
+                    "pr": {"number": 42, "repository": "owner/repo"},
+                },
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "accepted"
+        assert store.find_pr(42)[0]["job"]["id"] == "a"
+        store.assign_pr("auth", "a", 43, "owner/repo")
+        assert store.find_pr(42) == []
+        assert store.find_pr(43)[0]["job"]["id"] == "a"

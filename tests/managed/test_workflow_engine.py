@@ -8,6 +8,7 @@ import pytest
 from ctlrm.managed.workflows import WorkflowEngine, WorkflowService
 from ctlrm.runtime.workflows import WorkflowTemplate
 from conftest import FakeTerminal
+from test_projects import human_template as human_template
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def template(profile):
                 "reviewer": {"kind": "agent", "profile": "test"},
                 "owner": {"kind": "human"},
             },
-            "steps": {
+            "tasks": {
                 "implement": {
                     "role": "implementer",
                     "verify_input": False,
@@ -89,7 +90,7 @@ def complete(engine, client, outcome, summary="Checked"):
 
 
 class TestWorkflow:
-    """Run transitions remain distinct from process liveness and legacy room state."""
+    """Run transitions remain distinct from process liveness and room state."""
 
     def test_review_loop_and_replay(self, repository, template) -> None:
         """Each visit gets one durable assignment; sessions are reused across review loops."""
@@ -131,7 +132,7 @@ class TestWorkflow:
         assert retried.area.data == client.area.data and same == request
         with pytest.raises(ValueError, match="another instance"):
             WorkflowService.submit(repository, template, "Other", "Build", request_id="other")
-        template.steps["implement"].transitions["completed"] = "terminal:completed"
+        template.tasks["implement"].transitions["completed"] = "terminal:completed"
         with client.area.journal.writer():
             engine = WorkflowEngine(client.area, FakeTerminal())
             engine.tick()
@@ -149,7 +150,7 @@ class TestWorkflow:
             engine.tick()
             assert engine.state["requests"][bad]["status"] == "rejected"
             complete(engine, client, "completed")
-            assert engine.active()["step"] == "review"
+            assert engine.active()["task"] == "review"
             stale = client.request(
                 "workflow-report", {**payload, "outcome": "completed", "summary": "x"}
             )
@@ -164,7 +165,7 @@ class TestWorkflow:
                 "entry": "work",
                 "profiles": {"test": profile.model_dump()},
                 "roles": {"worker": {"kind": "agent", "profile": "test"}},
-                "steps": {
+                "tasks": {
                     "work": {
                         "role": "worker",
                         "verify_input": False,
@@ -191,7 +192,7 @@ class TestWorkflow:
 
     def test_execution_limit(self, repository, template) -> None:
         """Intentional cycles stop at a bounded count without reopening prior visits."""
-        template.limits.max_step_executions = 2
+        template.limits.max_task_executions = 2
         client, _ = WorkflowService.submit(repository, template, "Task", "Build")
         with client.area.journal.writer():
             engine = WorkflowEngine(client.area, FakeTerminal())
@@ -282,7 +283,7 @@ class TestPrecommitFailures:
 
 
 class TestHumanIdentity:
-    """Legacy room access cannot bypass the managed human role contract."""
+    """Direct room access cannot bypass the managed human role contract."""
 
     def test_conflicting_signature(self, repository, template) -> None:
         """A participant signed as an agent cannot approve a human workflow step."""
@@ -374,7 +375,7 @@ class TestWorkflowCli:
                     "entry": "approve",
                     "profiles": {},
                     "roles": {"owner": {"kind": "human"}},
-                    "steps": {
+                    "tasks": {
                         "approve": {
                             "role": "owner",
                             "verify_input": True,
@@ -522,7 +523,7 @@ class TestAutomaticWorkflow:
             engine.tick()
             assert engine.state["requests"][report]["status"] == "rejected"
             assert "artifact changed" in engine.state["requests"][report]["error"]
-            assert engine.active()["step"] == "review"
+            assert engine.active()["task"] == "review"
 
     def test_cancel_wins_over_report(self, repository, template) -> None:
         """Accepted cancellation prevents a late completion and disables recovery."""
@@ -569,7 +570,7 @@ class TestAutomaticWorkflow:
             client.request("resume", {"session_id": payload["session_id"]})
             engine.tick()
             complete(engine, client, "completed")
-            assert engine.active()["step"] == "review"
+            assert engine.active()["task"] == "review"
 
     def test_cancel_after_branch_drift(self, repository, template) -> None:
         """Cancellation remains available even when further dispatch has been paused."""
@@ -757,7 +758,7 @@ class TestReviewedWorkflowBoundaries:
 
     def test_custom_approval_checks_version(self, repository, template) -> None:
         """Renaming an outcome leaves the step's explicit version policy intact."""
-        template.steps["review"].transitions = {"lgtm": "approve", "changes_requested": "implement"}
+        template.tasks["review"].transitions = {"lgtm": "approve", "changes_requested": "implement"}
         client, _ = WorkflowService.submit(repository, template, "Task", "Build")
         with client.area.journal.writer():
             engine = WorkflowEngine(client.area, FakeTerminal())
@@ -795,8 +796,8 @@ class TestReviewedWorkflowBoundaries:
             assert engine.state["run"]["status"] == "canceled"
 
 
-class TestTaskInstructionsAndUpgrade:
-    """Task prompts and old immutable snapshots remain usable across terminology changes."""
+class TestTaskInstructions:
+    """Task prompts deliver their own instructions to the assigned participant."""
 
     def test_task_prompt(self, repository, template) -> None:
         """The actual assignment includes the task lens, separately from role instructions."""
@@ -810,25 +811,104 @@ class TestTaskInstructionsAndUpgrade:
             assert "Task instructions: Inspect authentication callers before editing." in body
             assert body in [item.body for item in client.area.room.read_inbox("implementer")]
 
-    def test_pre_upgrade_retry(self, repository, template) -> None:
-        """A historical steps snapshot without instruction fields accepts an identical retry."""
-        import json
 
-        client, request = WorkflowService.submit(
-            repository, template, "Goal", "Build", request_id="same"
-        )
-        old = copy.deepcopy(client.area.data)
-        snapshot = old["definition"]["template"]
-        snapshot["steps"] = snapshot.pop("tasks")
-        for task in snapshot["steps"].values():
-            task.pop("instructions")
-        (repository / ".ctlrm/area.yaml").write_text(json.dumps(old))
-        (repository / ".ctlrm/definition.yaml").write_text(json.dumps(old["definition"]))
-        retried, same = WorkflowService.submit(
-            repository, template, "Goal", "Build", request_id="same"
-        )
-        assert same == request
-        with retried.area.journal.writer():
-            engine = WorkflowEngine(retried.area, FakeTerminal())
+class TestFreshReviewSessions:
+    """A repeated review task receives a new conversation after the old process stops."""
+
+    def test_replay_between_stop_and_replace(self, repository, template) -> None:
+        """Replaying a fresh-review intent replaces once and keeps the new execution identity."""
+        template.tasks["review"].fresh_session = True
+        client, _ = WorkflowService.submit(repository, template, "Goal", "Implement")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
             engine.tick()
-            assert engine.state["run"]["task_id"] == old["definition"]["task"]["id"]
+            complete(engine, client, "completed")
+            owner = prepare(engine, client)
+            previous = copy.deepcopy(engine.state["sessions"][owner["session_id"]])
+            complete(engine, client, "changes_requested")
+            complete(engine, client, "completed")
+            execution_id = engine.active()["id"]
+            assert engine.state["sessions"][previous["id"]]["status"] == "stopped"
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            current = engine.state["sessions"][previous["id"]]
+            assert current["generation"] == previous["generation"] + 1
+            assert current["native_id"] != previous["native_id"]
+            client.ready(current["id"], current["generation"], current["native_id"])
+            engine.tick()
+            assert engine.active()["id"] == execution_id
+            assert engine.active()["session_id"] == previous["id"]
+            assert terminal.launches == 3
+
+
+class TestFreshRetry:
+    """A fresh-review execution cannot inherit context through explicit retry/resume."""
+
+    def test_stop_retry_resume(self, repository, template) -> None:
+        """The recorded previous native ID enforces freshness even after work is cleared."""
+        template.tasks["review"].fresh_session = True
+        client, _ = WorkflowService.submit(repository, template, "Goal", "Implement")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            complete(engine, client, "completed")
+            owner = prepare(engine, client)
+            session = engine.state["sessions"][owner["session_id"]]
+            old_native = session["native_id"]
+            client.request("stop", {"session_id": session["id"]})
+            engine.tick()
+            client.request(
+                "workflow-retry", {"execution_id": engine.active()["id"], "reason": "Fresh review"}
+            )
+            engine.tick()
+            client.request("resume", {"session_id": session["id"]})
+            engine.tick()
+            session = engine.state["sessions"][session["id"]]
+            client.ready(session["id"], session["generation"], session["native_id"])
+            engine.tick()
+            assert engine.state["sessions"][session["id"]]["status"] == "stopped"
+            engine.tick()
+            session = engine.state["sessions"][session["id"]]
+            assert session["native_id"] != old_native
+            client.ready(session["id"], session["generation"], session["native_id"])
+            engine.tick()
+            assert engine.active()["session_id"] == session["id"]
+
+
+class TestInitialCommitWorkflow:
+    """A direct bootstrap job can create the codebase's initial commit."""
+
+    def test_unborn_submission(self, tmp_path, human_template) -> None:
+        """A template without size policies needs HEAD only when it reports its output."""
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)], check=True, capture_output=True
+        )
+        client, _ = WorkflowService.submit(tmp_path, human_template, "Initialize", "Create code")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            assert engine.active()["task"] == "work"
+            (tmp_path / "source.txt").write_text("initial\n")
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "add", "source.txt"], check=True, capture_output=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(tmp_path),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.test",
+                    "commit",
+                    "-m",
+                    "Initial",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            complete(engine, client, "done")
+            assert engine.state["run"]["status"] == "completed"

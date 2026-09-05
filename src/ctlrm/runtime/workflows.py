@@ -1,9 +1,8 @@
 """Versioned reusable workflow definitions and task/execution records."""
 
-import copy
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ctlrm.managed.providers import ProviderProfile
 from ctlrm.runtime.documents import load_yaml
@@ -39,6 +38,12 @@ class TaskDefinition(Record):
     role: str
     instructions: str = Field(default="", max_length=16384)
     verify_input: bool
+    optional: bool = False
+    fresh_session: bool = False
+    requires_pr: list[str] = Field(default_factory=list, max_length=32)
+    max_executions: int | None = Field(default=None, ge=1, le=1000)
+    specialist_tasks: list[str] = Field(default_factory=list, max_length=8)
+    specialist_above_lines: dict[str, int] = Field(default_factory=dict, max_length=8)
     verified_outcomes: list[str] = Field(default_factory=list, max_length=32)
     transitions: dict[str, str] = Field(min_length=1, max_length=32)
 
@@ -60,7 +65,8 @@ class TaskDefinition(Record):
 class ExecutionLimits(Record):
     """Bound intentional cycles and explicit retries."""
 
-    max_step_executions: int = Field(default=12, ge=1, le=1000)
+    max_task_executions: int = Field(default=12, ge=1, le=1000)
+    max_specialist_executions: int = Field(default=3, ge=0, le=32)
 
 
 class WorkflowTemplate(Record):
@@ -72,14 +78,7 @@ class WorkflowTemplate(Record):
     limits: ExecutionLimits = Field(default_factory=ExecutionLimits)
     profiles: dict[str, ProviderProfile]
     roles: dict[str, WorkflowRole] = Field(min_length=1, max_length=32)
-    tasks: dict[str, TaskDefinition] = Field(
-        min_length=1, max_length=128, validation_alias=AliasChoices("tasks", "steps")
-    )
-
-    @property
-    def steps(self) -> dict[str, TaskDefinition]:
-        """Expose the historical Python name without duplicating task definitions."""
-        return self.tasks
+    tasks: dict[str, TaskDefinition] = Field(min_length=1, max_length=128)
 
     @classmethod
     def parse(cls, text: str) -> "WorkflowTemplate":
@@ -91,61 +90,94 @@ class WorkflowTemplate(Record):
         except RecursionError as error:
             raise ValueError("template nesting is too deep") from error
 
-    @classmethod
-    def from_snapshot(cls, value: dict) -> "WorkflowTemplate":
-        """Read earlier immutable snapshots using their original approval-name policy."""
-        value = copy.deepcopy(value)
-        for step in value.get("tasks", value.get("steps", {})).values():
-            if "verify_input" not in step:
-                step["verify_input"] = False
-                step["verified_outcomes"] = (
-                    ["approved"] if "approved" in step.get("transitions", {}) else []
-                )
-        return cls.model_validate(value)
-
     @model_validator(mode="after")
     def validate_graph(self) -> "WorkflowTemplate":
-        """Reject unresolved edges, unreachable steps, and graphs without an exit."""
-        for key in [self.name, *self.roles, *self.steps, *self.profiles]:
+        """Reject unresolved edges, unreachable tasks, and graphs without an exit."""
+        for key in [self.name, *self.roles, *self.tasks, *self.profiles]:
             validate_path_component(key, label="workflow identifier", max_length=64)
             if key == "coordinator":
                 raise ValueError("coordinator is reserved")
         for role in self.roles.values():
             if role.kind == "agent" and role.profile not in self.profiles:
                 raise ValueError(f"unknown profile: {role.profile}")
-        if self.entry not in self.steps:
-            raise ValueError("unknown entry step")
-        for step in self.steps.values():
-            if step.role not in self.roles:
-                raise ValueError(f"unknown role: {step.role}")
-            for outcome, destination in step.transitions.items():
+        if self.entry not in self.tasks or self.tasks[self.entry].optional:
+            raise ValueError("unknown entry task")
+        for task in self.tasks.values():
+            if (
+                len(set(task.requires_pr)) != len(task.requires_pr)
+                or set(task.requires_pr) - task.transitions.keys()
+            ):
+                raise ValueError("PR-required outcomes must be unique declared outcomes")
+            if len(set(task.specialist_tasks)) != len(task.specialist_tasks):
+                raise ValueError("specialist tasks must be unique")
+            if set(task.specialist_above_lines) - set(task.specialist_tasks) or any(
+                type(n) is not int or not 0 <= n <= 1000000
+                for n in task.specialist_above_lines.values()
+            ):
+                raise ValueError("specialist thresholds must be bounded counts for permitted tasks")
+            if any(
+                target not in self.tasks or not self.tasks[target].optional
+                for target in task.specialist_tasks
+            ):
+                raise ValueError("specialist requests must reference defined optional tasks")
+            if task.optional:
+                if (
+                    not task.verify_input
+                    or task.specialist_tasks
+                    or set(task.transitions) != {"approved", "changes_requested"}
+                    or task.transitions["approved"] != "terminal:return"
+                ):
+                    raise ValueError(
+                        "optional review tasks must verify input, cannot recurse, and must approve with terminal:return"
+                    )
+                if (
+                    task.transitions["changes_requested"] not in self.tasks
+                    or self.tasks[task.transitions["changes_requested"]].optional
+                ):
+                    raise ValueError("specialist findings must return to a normal task")
+            elif "terminal:return" in task.transitions.values():
+                raise ValueError("only optional tasks may return to their requester")
+            if task.specialist_tasks and "approved" not in task.transitions:
+                raise ValueError("specialist requesters require an approved outcome")
+            if task.role not in self.roles:
+                raise ValueError(f"unknown role: {task.role}")
+            for outcome, destination in task.transitions.items():
                 validate_path_component(outcome, label="outcome", max_length=64)
-                if destination not in self.steps and destination not in TERMINALS:
+                if (
+                    destination not in self.tasks
+                    and destination not in TERMINALS
+                    and destination != "terminal:return"
+                ):
                     raise ValueError(f"unknown transition destination: {destination}")
+                if destination in self.tasks and self.tasks[destination].optional:
+                    raise ValueError(
+                        "optional tasks are entered only through bounded specialist requests"
+                    )
         seen, pending = set(), [self.entry]
         while pending:
             current = pending.pop()
             if current in seen:
                 continue
             seen.add(current)
-            if current in self.steps:
-                pending.extend(self.steps[current].transitions.values())
-        if set(self.steps) - seen:
-            raise ValueError("workflow contains unreachable steps")
+            if current in self.tasks:
+                pending.extend(self.tasks[current].transitions.values())
+                pending.extend(self.tasks[current].specialist_tasks)
+        if set(self.tasks) - seen:
+            raise ValueError("workflow contains unreachable tasks")
         if not seen & TERMINALS:
             raise ValueError("workflow has no reachable terminal")
-        escapable = set(TERMINALS)
+        escapable = {*TERMINALS, "terminal:return"}
         while True:
             added = {
                 name
-                for name, step in self.steps.items()
-                if set(step.transitions.values()) & escapable
+                for name, task in self.tasks.items()
+                if set(task.transitions.values()) & escapable
             } - escapable
             if not added:
                 break
             escapable.update(added)
-        if set(self.steps) - escapable:
-            raise ValueError("every step must have a path to a terminal")
+        if set(self.tasks) - escapable:
+            raise ValueError("every task must have a path to a terminal")
         return self
 
 
@@ -159,9 +191,9 @@ class JobInput(Record):
     @field_validator("title", "instructions")
     @classmethod
     def validate_text(cls, value: str) -> str:
-        """Reject blank task text before publishing any immutable area files."""
+        """Reject blank job text before publishing any immutable area files."""
         if not value.strip() or len(value.encode()) > 65536:
-            raise ValueError("task text must be nonblank and at most 65536 bytes")
+            raise ValueError("job text must be nonblank and at most 65536 bytes")
         return value
 
 
@@ -169,11 +201,13 @@ class TaskExecution(Record):
     """One durable visit; repeated visits always have distinct IDs."""
 
     id: str
-    task: str = Field(validation_alias=AliasChoices("task", "step"), serialization_alias="step")
+    task: str
     participant: str
     status: Literal["waiting", "pending", "acknowledged", "completed", "abandoned"] = "waiting"
     session_id: str | None = None
     generation: int | None = None
+    fresh_after_native_id: str | None = None
+    reset_generation: int | None = None
     message: dict | None = None
     input: dict = Field(default_factory=dict)
     outcome: str | None = None
@@ -185,16 +219,8 @@ class WorkflowRun(Record):
     """Replayable execution progress, separate from provider process liveness."""
 
     id: str
-    job_id: str = Field(
-        validation_alias=AliasChoices("job_id", "task_id"), serialization_alias="task_id"
-    )
+    job_id: str
     status: str = "running"
     active: str | None = None
     executions: list[dict] = Field(default_factory=list)
     reason: str | None = None
-
-
-# Historical imports and serialized journal keys remain readable.
-WorkflowStep = TaskDefinition
-StepExecution = TaskExecution
-Task = JobInput

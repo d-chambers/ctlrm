@@ -47,62 +47,20 @@ class TestArea:
                 prompt="Different",
             )
 
-    def test_legacy_requires_adoption(self, repository: Path) -> None:
-        """A legacy room must remain intact until explicit compatible adoption."""
+    def test_populated_area_rejected(self, repository: Path) -> None:
+        """A populated coordination directory is never overwritten."""
         runtime = repository / ".ctlrm"
         runtime.mkdir()
-        (runtime / "legacy.md").write_text("preserve")
-        with pytest.raises(ValueError, match="legacy"):
+        (runtime / "existing.md").write_text("preserve")
+        with pytest.raises(ValueError, match="populated"):
             Area.create(repository, mode="standalone", roles={}, profiles={}, prompt="Task")
-        assert (runtime / "legacy.md").read_text() == "preserve"
+        assert (runtime / "existing.md").read_text() == "preserve"
 
     def test_detached_rejected(self, repository: Path) -> None:
         """Native managed sessions require an explicit branch identity."""
         git(repository, "checkout", "--detach")
         with pytest.raises(ValueError):
             worktree(repository)
-
-
-class TestLegacyAdoption:
-    """Explicit adoption preserves stable signatures rather than replacing their owner."""
-
-    def test_author_identity_is_preserved(self, repository: Path, profile) -> None:
-        """A compatible legacy author keeps its name, capabilities, and room ID."""
-        from ctlrm.runtime.room import RoomRuntime
-        from ctlrm.runtime.manifest import RoomManifest, RoleAssignment
-
-        room = RoomRuntime(repository)
-        manifest = RoomManifest(
-            id="legacy",
-            author="coordinator",
-            created_at="2026-09-05T00:00:00+00:00",
-            prompt="Task",
-            assignments=[
-                RoleAssignment(participant="coordinator", role="coordinator"),
-                RoleAssignment(participant="agent", role="worker"),
-            ],
-        )
-        room.initialize(
-            manifest,
-            name="Owner",
-            kind="human",
-            provider=None,
-            capabilities=[],
-            joined_at=manifest.created_at,
-        )
-        original = room.signature_path("coordinator").read_bytes()
-        area = Area.create(
-            repository,
-            mode="standalone",
-            roles={
-                "agent": {"name": "Agent", "kind": "agent", "role": "worker", "profile": "test"}
-            },
-            profiles={"test": profile.model_dump()},
-            prompt="Task",
-            adopt=True,
-        )
-        assert area.data["room_id"] == "legacy"
-        assert area.room.signature_path("coordinator").read_bytes() == original
 
 
 class TestRuntimeSymlinks:

@@ -17,7 +17,7 @@ class TestTransition:
                 "entry": "review",
                 "profiles": {},
                 "roles": {"owner": {"kind": "human"}},
-                "steps": {
+                "tasks": {
                     "review": {
                         "role": "owner",
                         "verify_input": True,

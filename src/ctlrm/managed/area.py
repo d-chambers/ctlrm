@@ -86,9 +86,8 @@ class Area:
         profiles: dict,
         prompt: str,
         definition: dict | None = None,
-        adopt: bool = False,
     ) -> "Area":
-        """Snapshot one instance, refusing unrelated work or implicit legacy adoption."""
+        """Snapshot one instance, refusing any unrelated existing coordination state."""
         root, branch = worktree(path)
         if (root / ".ctlrm").is_symlink():
             raise ValueError("coordination runtime must not be a symlink")
@@ -98,7 +97,7 @@ class Area:
             if (
                 mode != "workflow"
                 or not definition
-                or definition.get("task", {}).get("id") != job["id"]
+                or definition.get("job", {}).get("id") != job["id"]
             ):
                 raise ValueError("central job area requires its planned workflow")
         journal = Journal(root)
@@ -120,20 +119,12 @@ class Area:
         area_path = runtime_path(root) / "area.yaml"
 
         def existing() -> "Area | None":
-            """Retry compatible initialization without acquiring the daemon's lifetime lock."""
+            """Retry identical initialization without acquiring the daemon's lifetime lock."""
             if not area_path.exists():
                 return None
             area = cls.load(root)
             area.validate()
-            if any(
-                (
-                    area.data.get("requested_roles", area.data["roles"])
-                    if key == "roles"
-                    else area.data.get(key)
-                )
-                != value
-                for key, value in spec.items()
-            ):
+            if any(area.data[key] != value for key, value in spec.items()):
                 raise ValueError("this worktree already coordinates another instance")
             area.ensure_room()
             return area
@@ -146,44 +137,9 @@ class Area:
             if reused is not None:
                 return reused
             children = [p for p in runtime_path(root).iterdir() if p.name != "supervisor"]
-            if children and not adopt:
-                raise ValueError("populated legacy area: use a fresh worktree or explicit --adopt")
-            room_id = identifier("room")
             if children:
-                legacy = RoomRuntime(root).read_room()
-                expected = {
-                    "coordinator": "coordinator",
-                    **{key: val["role"] for key, val in roles.items()},
-                }
-                if (
-                    legacy.author != "coordinator"
-                    or {a.participant: a.role for a in legacy.assignments} != expected
-                ):
-                    raise ValueError(
-                        "legacy roster must match the managed coordinator and role bindings"
-                    )
-                if legacy.prompt != prompt:
-                    raise ValueError("legacy prompt must match the requested instance")
-                legacy_runtime = RoomRuntime(root)
-                if legacy_runtime.signature_path("coordinator").exists():
-                    signature = legacy_runtime.read_signature("coordinator")
-                    coordinator = signature.model_dump(include=set(coordinator))
-                for participant, role in spec["roles"].items():
-                    if not legacy_runtime.signature_path(participant).exists():
-                        continue
-                    signature = legacy_runtime.read_signature(participant)
-                    provider = (
-                        profiles[role["profile"]]["provider"] if role["kind"] == "agent" else None
-                    )
-                    if (signature.name, signature.kind, signature.provider) != (
-                        role["name"],
-                        role["kind"],
-                        provider,
-                    ):
-                        raise ValueError(f"legacy participant identity conflicts: {participant}")
-                    role["capabilities"] = signature.capabilities
-                    role["restart_command"] = signature.restart_command
-                room_id = legacy.id
+                raise ValueError("coordination directory is populated; use a fresh area")
+            room_id = identifier("room")
             data = {
                 "schema_version": 1,
                 "id": identifier("area"),
@@ -192,7 +148,6 @@ class Area:
                 "room_id": room_id,
                 "created_at": now(),
                 "coordinator": coordinator,
-                "requested_roles": roles,
                 **spec,
             }
             ignore_runtime(root)
@@ -215,14 +170,14 @@ class Area:
             publish(self.room.root / "definition.yaml", self.data["definition"])
             from ctlrm.runtime.room import _write_exclusive_atomic
 
-            task = self.data["definition"]["task"]
-            content = f"# {task['title']}\n\n{task['instructions']}\n"
-            path = self.room.root / "task.md"
+            job = self.data["definition"]["job"]
+            content = f"# {job['title']}\n\n{job['instructions']}\n"
+            path = self.room.root / "job.md"
             try:
                 _write_exclusive_atomic(path, content)
             except FileExistsError:
                 if path.read_text() != content:
-                    raise ValueError("conflicting immutable task snapshot")
+                    raise ValueError("conflicting immutable job snapshot")
         manifest = RoomManifest(
             id=self.data["room_id"],
             author="coordinator",
@@ -231,25 +186,11 @@ class Area:
             assignments=[RoleAssignment(participant="coordinator", role="coordinator")]
             + [
                 RoleAssignment(participant=key, role=value["role"])
-                for key, value in self.data["roles"].items()
+                for key, value in sorted(self.data["roles"].items())
             ],
         )
-        if self.room.room_path.exists():
-            existing = self.room.read_room()
-            if {a.participant: a.role for a in existing.assignments} == {
-                a.participant: a.role for a in manifest.assignments
-            }:
-                manifest.assignments = existing.assignments
         self.room.initialize(
             manifest,
-            **self.data.get(
-                "coordinator",
-                {
-                    "name": "Control room",
-                    "kind": "human",
-                    "provider": None,
-                    "capabilities": ["coordinate"],
-                },
-            ),
+            **self.data["coordinator"],
             joined_at=self.data["created_at"],
         )

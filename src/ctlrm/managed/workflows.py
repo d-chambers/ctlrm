@@ -1,6 +1,7 @@
 """Workflow clients and transitions using the session supervisor's single journal."""
 
 import json
+import os
 from pathlib import Path
 import shlex
 import sys
@@ -45,6 +46,10 @@ class WorkflowService(SessionService):
             area = Area.load(root)
             definition = area.data.get("definition") or {}
             expected = {"template": snapshot, "bindings": bindings}
+            if request_id is None:
+                raise ValueError(
+                    f"area already exists; retry identical submission with --request-id {definition.get('submission_id', 'ORIGINAL_ID')}"
+                )
             if (
                 not request_id
                 or definition.get("submission_id") != request_id
@@ -86,6 +91,8 @@ class WorkflowService(SessionService):
         role = self.area.data["roles"].get(participant)
         if not role or role["kind"] != "human":
             raise ValueError("human join requires an assigned human role")
+        if os.environ.get("CTLRM_SESSION"):
+            raise ValueError("managed agent sessions cannot accept a human role")
         self.area.validate()
         self.area.room._join(
             self.area.room.read_room(),
@@ -157,6 +164,8 @@ class WorkflowEngine(SessionEngine):
             expected_provider,
         ):
             raise ValueError("participant signature conflicts with the managed role")
+        if role["kind"] == "human" and os.environ.get("CTLRM_SESSION"):
+            raise ValueError("managed agent sessions cannot submit human responses")
         session = None
         if role["kind"] == "agent":
             session = self._session(payload)
@@ -192,6 +201,13 @@ class WorkflowEngine(SessionEngine):
                 return
             if execution["status"] != "acknowledged":
                 raise ValueError("acknowledge the assignment before reporting")
+            if session and (
+                session["work"]["status"] != "acknowledged"
+                or execution["generation"] != session["generation"]
+            ):
+                raise ValueError(
+                    "acknowledge this execution in the current generation before reporting"
+                )
             outcome, summary = payload.get("outcome"), payload.get("summary")
             if not isinstance(outcome, str) or not isinstance(summary, str) or len(summary) > 16384:
                 raise ValueError("outcome and a bounded summary are required")

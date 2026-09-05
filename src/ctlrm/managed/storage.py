@@ -1,5 +1,6 @@
 """Bounded immutable records and a single-writer, hash-chained event journal."""
 
+import copy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
@@ -84,6 +85,47 @@ def publish(path: Path, value: dict) -> None:
             raise ValueError(f"immutable record conflict: {path}")
 
 
+def changes(before: object, after: object) -> dict:
+    """Encode only changed values so history cannot make later event records unbounded."""
+    if isinstance(before, dict) and isinstance(after, dict):
+        return {
+            "map": {
+                key: changes(before[key], value) if key in before else {"set": value}
+                for key, value in after.items()
+                if key not in before or before[key] != value
+            },
+            "remove": sorted(before.keys() - after.keys()),
+        }
+    if isinstance(before, list) and isinstance(after, list):
+        return {
+            "list": {
+                str(index): changes(before[index], value) if index < len(before) else {"set": value}
+                for index, value in enumerate(after)
+                if index >= len(before) or before[index] != value
+            },
+            "length": len(after),
+        }
+    return {"set": after}
+
+
+def patched(before: object, delta: dict) -> object:
+    """Apply an accepted event delta while retaining prior immutable history."""
+    if "set" in delta:
+        return copy.deepcopy(delta["set"])
+    if "map" in delta:
+        result = dict(before)
+        for key in delta["remove"]:
+            del result[key]
+        for key, value in delta["map"].items():
+            result[key] = patched(result.get(key), value)
+        return result
+    result = list(before[: delta["length"]])
+    result.extend([None] * (delta["length"] - len(result)))
+    for index, value in delta["list"].items():
+        result[int(index)] = patched(result[int(index)], value)
+    return result
+
+
 class Journal:
     """Store client submissions and supervisor-committed snapshots separately."""
 
@@ -124,9 +166,12 @@ class Journal:
             checksum = event.pop("checksum", None)
             if event.get("previous") != previous or digest(event) != checksum:
                 raise ValueError(f"corrupted accepted history: {path}")
-            if not isinstance(event.get("state"), dict):
+            try:
+                state = event["state"] if "state" in event else patched(state, event["changes"])
+            except (KeyError, TypeError, IndexError) as error:
+                raise ValueError(f"invalid event changes: {path}") from error
+            if not isinstance(state, dict):
                 raise ValueError(f"invalid event state: {path}")
-            state = event["state"]
             previous = checksum
         return state, sequence, previous
 
@@ -134,14 +179,14 @@ class Journal:
         """Commit a complete transition before performing its external effects."""
         if not self.locked:
             raise RuntimeError("event commits require the supervisor lock")
-        _, sequence, previous = self.replay()
+        prior, sequence, previous = self.replay()
         event = {
             "sequence": sequence + 1,
             "previous": previous,
             "at": now(),
             "kind": kind,
             "detail": detail or {},
-            "state": state,
+            **({"state": state} if sequence == 0 else {"changes": changes(prior, state)}),
         }
         event["checksum"] = digest(event)
         publish(self.root / "events" / f"{sequence + 1:012d}.json", event)

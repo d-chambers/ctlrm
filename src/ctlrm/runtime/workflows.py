@@ -97,6 +97,18 @@ class WorkflowTemplate(Record):
             raise ValueError("workflow contains unreachable steps")
         if not seen & TERMINALS:
             raise ValueError("workflow has no reachable terminal")
+        escapable = set(TERMINALS)
+        while True:
+            added = {
+                name
+                for name, step in self.steps.items()
+                if set(step.transitions.values()) & escapable
+            } - escapable
+            if not added:
+                break
+            escapable.update(added)
+        if set(self.steps) - escapable:
+            raise ValueError("every step must have a path to a terminal")
         return self
 
 

@@ -45,3 +45,15 @@ class TestTemplate:
         """Duplicate and implicitly boolean YAML keys cannot change graph meaning."""
         with pytest.raises(ValueError):
             WorkflowTemplate.parse(text)
+
+
+class TestTrapCycle:
+    """Every reachable step must retain a possible route to a terminal."""
+
+    def test_inescapable_branch(self) -> None:
+        """A terminal on one branch cannot validate another branch that loops forever."""
+        data = copy.deepcopy(HUMAN)
+        data["steps"]["approve"]["transitions"]["retry"] = "trap"
+        data["steps"]["trap"] = {"role": "owner", "transitions": {"again": "trap"}}
+        with pytest.raises(ValueError, match="every step"):
+            WorkflowTemplate.model_validate(data)

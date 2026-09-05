@@ -414,3 +414,69 @@ class TestWorkflowCli:
             json.loads(runner.invoke(app, [*prefix, "status"]).output)["state"]["run"]["status"]
             == "completed"
         )
+
+
+class TestCounterpartBoundaries:
+    """Dispatch errors, recovery, and cooperative role restrictions remain independent."""
+
+    def test_dispatch_conflict_does_not_delay_stop(self, repository, template) -> None:
+        """A poisoned mailbox must not prevent an accepted stop from taking effect."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            payload = prepare(engine, client)
+            execution = engine.active()
+            path = (
+                client.area.room.root
+                / "participants/implementer/inbox"
+                / f"{execution['message']['id']}.md"
+            )
+            path.write_text("foreign content")
+            client.request("stop", {"session_id": payload["session_id"]})
+            engine.tick()
+            assert engine.state["sessions"][payload["session_id"]]["status"] == "stopped"
+            assert not terminal.terminals
+
+    def test_recovered_work_requires_ack(self, repository, template) -> None:
+        """not_started cannot inherit the previous generation's execution acknowledgment."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            payload = prepare(engine, client)
+            client.request("workflow-ack", payload)
+            engine.tick()
+            current = engine.state["sessions"][payload["session_id"]]
+            terminal.terminals[current["spec"]["terminal_name"]]["health"] = "exited"
+            for _ in range(3):
+                engine.tick()
+            client.ready(current["id"], 2, current["native_id"])
+            engine.tick()
+            payload["generation"] = 2
+            client.request(
+                "disposition",
+                {**payload, "work_id": payload["execution_id"], "status": "not_started"},
+            )
+            engine.tick()
+            report = client.request(
+                "workflow-report", {**payload, "outcome": "completed", "summary": "Done"}
+            )
+            engine.tick()
+            assert engine.state["requests"][report]["status"] == "rejected"
+            client.request("workflow-ack", payload)
+            engine.tick()
+            report = client.request(
+                "workflow-report", {**payload, "outcome": "completed", "summary": "Done"}
+            )
+            engine.tick()
+            assert engine.state["requests"][report]["status"] == "accepted"
+
+    def test_managed_agent_cannot_join_human(self, repository, template, monkeypatch) -> None:
+        """Prevent accidental role crossing by a managed agent's inherited environment."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        monkeypatch.setenv("CTLRM_SESSION", "managed-agent")
+        with pytest.raises(ValueError, match="cannot accept a human"):
+            client.join("owner")

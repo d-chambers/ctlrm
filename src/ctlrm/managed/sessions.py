@@ -413,7 +413,6 @@ class SessionEngine:
             except (ValueError, OSError, RuntimeError) as error:
                 self.state = self.journal.replay()[0]
                 errors.append(f"workflow dispatch: {error}")
-                return errors
         for session in list(self.state["sessions"].values()):
             try:
                 if self.state["paused"] and session["status"] != "stopping":

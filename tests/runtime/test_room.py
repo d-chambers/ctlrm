@@ -639,3 +639,26 @@ class TestRoomRecoveryFailures:
         with pytest.raises(ValueError, match="restore room.md"):
             initialize(runtime)
         assert not runtime.room_path.exists()
+
+
+class TestConcurrentInitialization:
+    """A concurrently completed matching room remains resumable."""
+
+    def test_manifest_appears_during_scan(self, tmp_path: Path, monkeypatch) -> None:
+        """Recheck the manifest after observing another initializer's signatures."""
+        runtime = RoomRuntime(tmp_path)
+        original = Path.exists
+        injected = False
+
+        def exists(path: Path) -> bool:
+            """Complete another initialization after the first absence observation."""
+            nonlocal injected
+            if path == runtime.room_path and not injected:
+                injected = True
+                initialize(runtime)
+                return False
+            return original(path)
+
+        monkeypatch.setattr(Path, "exists", exists)
+        initialize(runtime)
+        assert runtime.read_signature("coordinator").id == "coordinator"

@@ -135,7 +135,7 @@ class RoomRuntime(ProjectRuntime):
         """
         if not self.room_path.exists() and (self.root / "participants").exists():
             signatures = sorted((self.root / "participants").glob("*.yaml"))
-            if signatures:
+            if signatures and not self.room_path.exists():
                 raise ValueError(
                     f"room manifest is missing but participant data exists: {signatures[0]}; "
                     "restore room.md or use a fresh coordination directory"

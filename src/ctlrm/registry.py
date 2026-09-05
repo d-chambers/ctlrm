@@ -108,6 +108,7 @@ class Registry(BaseModel):
                         existing.participants.append(item.model_copy(deep=True))
                         known.add(item.id)
                 return existing
+        for existing in self.projects:
             if existing.id == project.id:
                 raise ValueError(f"project id already belongs to another worktree: {project.id}")
         entry = project.model_copy(deep=True)

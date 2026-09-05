@@ -590,3 +590,23 @@ class TestMarkdownWhitespace:
         prompt = "    first()\n    second()  "
         manifest = room(prompt=prompt)
         assert RoomManifest.parse(manifest.to_markdown()).prompt == prompt
+
+
+class TestPromptLineEndings:
+    """Prompts from binary stdin normalize like prompts read from disk."""
+
+    @pytest.mark.parametrize("newline", ["\r\n", "\r"])
+    def test_retry_with_crlf(self, tmp_path: Path, newline: str) -> None:
+        """The same prompt remains resumable after universal newline decoding."""
+        runtime = RoomRuntime(tmp_path)
+        manifest = room(prompt=f"First{newline}    Second{newline}")
+        for _ in range(2):
+            runtime.initialize(
+                manifest,
+                name="Coordinator",
+                kind="human",
+                provider=None,
+                capabilities=[],
+                joined_at="2026-09-05T12:00:00+00:00",
+            )
+        assert runtime.read_room().prompt == "First\n    Second"

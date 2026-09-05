@@ -70,7 +70,7 @@ class RoomManifest(BaseModel):
         """Reject an empty or whitespace-only prompt."""
         if not value.strip():
             raise ValueError("room prompt cannot be blank")
-        return value.strip("\n")
+        return value.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
 
     @model_validator(mode="after")
     def _validate_assignments(self) -> RoomManifest:

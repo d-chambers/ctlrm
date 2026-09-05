@@ -112,3 +112,17 @@ class TestRegistryCallerAdditions:
         agent = Participant.human("reviewer", "Reviewer", "review", tmp_path)
         Registry.add_participant(path, project, agent)
         assert {p.id for p in Registry.load(path).projects[0].participants} == {"owner", "reviewer"}
+
+
+class TestRegistryIdentityOrder:
+    """Worktree identity takes precedence over display IDs regardless of order."""
+
+    def test_existing_root_wins_over_alias(self, tmp_path: Path) -> None:
+        """An alias matching another entry cannot hide the canonical root."""
+        from ctlrm.models import Project
+
+        one = Project(id="one", name="One", root=tmp_path / "a")
+        two = Project(id="two", name="Two", root=tmp_path / "b")
+        alias = Project(id="one", name="Alias", root=two.root)
+        for entries in ([one, two], [two, one]):
+            assert Registry(projects=entries).project_for(alias) is two

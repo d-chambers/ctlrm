@@ -4,6 +4,7 @@ dynamic = ["version"]
 description = "TUI workbench for orchestrating CLI agents and human workflow participants"
 requires-python = ">=3.11"
 dependencies = [
+    "libtmux>=0.62,<0.63",
     "pydantic>=2.7",
     "pyyaml>=6.0",
     "textual>=0.70",

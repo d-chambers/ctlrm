@@ -17,7 +17,11 @@ from ctlrm.runtime.manifest import RoleAssignment, RoomManifest
 from ctlrm.runtime.messages import MailboxMessage
 from ctlrm.runtime.room import RoomRuntime
 
+from ctlrm.managed.cli import session_app, supervisor_app
+
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+app.add_typer(session_app, name="session")
+app.add_typer(supervisor_app, name="supervisor")
 _Result = TypeVar("_Result")
 
 

@@ -1,0 +1,21 @@
+schema_version: 1
+name: single-agent
+entry: work
+profiles:
+  coder:
+    provider: codex
+    executable: codex
+    context: ~/.codex
+    input_mode: native
+    arguments: [--sandbox, workspace-write]
+roles:
+  worker:
+    kind: agent
+    profile: coder
+    instructions: Follow repository instructions and work on the assigned job goal.
+tasks:
+  work:
+    role: worker
+    instructions: Complete the goal, run applicable checks, and summarize results and limitations.
+    verify_input: false
+    transitions: {completed: 'terminal:completed', blocked: 'terminal:failed'}

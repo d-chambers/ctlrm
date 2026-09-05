@@ -832,3 +832,33 @@ class TestTaskInstructionsAndUpgrade:
             engine = WorkflowEngine(retried.area, FakeTerminal())
             engine.tick()
             assert engine.state["run"]["task_id"] == old["definition"]["task"]["id"]
+
+
+class TestFreshReviewSessions:
+    """A repeated review task receives a new conversation after the old process stops."""
+
+    def test_replay_between_stop_and_replace(self, repository, template) -> None:
+        """Replaying a fresh-review intent replaces once and keeps the new execution identity."""
+        template.tasks["review"].fresh_session = True
+        client, _ = WorkflowService.submit(repository, template, "Goal", "Implement")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            complete(engine, client, "completed")
+            owner = prepare(engine, client)
+            previous = copy.deepcopy(engine.state["sessions"][owner["session_id"]])
+            complete(engine, client, "changes_requested")
+            complete(engine, client, "completed")
+            execution_id = engine.active()["id"]
+            assert engine.state["sessions"][previous["id"]]["status"] == "stopped"
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            current = engine.state["sessions"][previous["id"]]
+            assert current["generation"] == previous["generation"] + 1
+            assert current["native_id"] != previous["native_id"]
+            client.ready(current["id"], current["generation"], current["native_id"])
+            engine.tick()
+            assert engine.active()["id"] == execution_id
+            assert engine.active()["session_id"] == previous["id"]
+            assert terminal.launches == 3

@@ -193,7 +193,10 @@ class ProjectStore:
             "job": job.model_dump(),
             "launch": launch,
             "status": run["status"] if run else ("starting" if launch else "planned"),
-            "pr": self.journal(project_id).replay()[0].get("pull_requests", {}).get(job_id),
+            "pr": self.journal(project_id)
+            .replay()[0]
+            .get("pull_requests", {})
+            .get(job_id, state.get("pr")),
             "run": run,
             "sessions": state["sessions"],
             "paused": state.get("paused"),

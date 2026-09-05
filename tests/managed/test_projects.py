@@ -384,3 +384,39 @@ class TestReviewedProjectBoundaries:
         (repository / ".ctlrm").symlink_to(target, target_is_directory=True)
         ProjectRuntime(repository).init_participant("worker")
         assert (target / "participants/worker/inbox").is_dir()
+
+
+class TestWorkflowPrReporting:
+    """An agent or human can attach PR metadata through its owned task report."""
+
+    def test_report_is_searchable(self, store, human_template) -> None:
+        """Accepted report metadata feeds central search, with explicit assignments overriding it."""
+        human_template.tasks["work"].requires_pr = ["done"]
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        client.join("owner")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            payload = {
+                "run_id": engine.state["run"]["id"],
+                "execution_id": engine.active()["id"],
+                "participant": "owner",
+            }
+            client.request("workflow-ack", payload)
+            engine.tick()
+            request = client.request(
+                "workflow-report",
+                {
+                    **payload,
+                    "outcome": "done",
+                    "summary": "Published",
+                    "pr": {"number": 42, "repository": "owner/repo"},
+                },
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "accepted"
+        assert store.find_pr(42)[0]["job"]["id"] == "a"
+        store.assign_pr("auth", "a", 43, "owner/repo")
+        assert store.find_pr(42) == []
+        assert store.find_pr(43)[0]["job"]["id"] == "a"

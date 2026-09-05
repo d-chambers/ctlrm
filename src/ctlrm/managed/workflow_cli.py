@@ -109,6 +109,11 @@ def report(
     generation: int | None = None,
     input_artifact: str | None = None,
     request_id: str | None = None,
+    specialist: list[str] | None = None,
+    specialist_reason: str | None = None,
+    pr_number: int | None = None,
+    pr_repository: str | None = None,
+    pr_url: str | None = None,
 ) -> None:
     """Report an allowed outcome; human responses follow the same validation path."""
     _run(
@@ -124,6 +129,11 @@ def report(
                 "input_artifact": input_artifact,
                 "outcome": outcome,
                 "summary": summary,
+                "specialists": specialist,
+                "specialist_reason": specialist_reason,
+                "pr": {"number": pr_number, "repository": pr_repository, "url": pr_url}
+                if any(value is not None for value in (pr_number, pr_repository, pr_url))
+                else None,
             },
             request_id,
         )

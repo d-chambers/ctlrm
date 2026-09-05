@@ -22,14 +22,16 @@ roles:
   owner:
     kind: human
     instructions: Inspect the reviewed artifact and accept or reject the result.
-steps:
+tasks:
   implement:
     role: implementer
+    instructions: Implement the job goal and address findings from earlier reviews.
     verify_input: false
     transitions:
       completed: review
   review:
     role: reviewer
+    instructions: Review the current changes for correctness and compatibility.
     verify_input: true
     transitions:
       approved: approve

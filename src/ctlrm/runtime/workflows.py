@@ -3,7 +3,7 @@
 import copy
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ctlrm.managed.providers import ProviderProfile
 from ctlrm.runtime.documents import load_yaml
@@ -33,16 +33,17 @@ class WorkflowRole(Record):
         return self
 
 
-class WorkflowStep(Record):
-    """A role visit with explicitly named business outcomes."""
+class TaskDefinition(Record):
+    """A reusable assignment with task-specific instructions and explicit outcomes."""
 
     role: str
+    instructions: str = Field(default="", max_length=16384)
     verify_input: bool
     verified_outcomes: list[str] = Field(default_factory=list, max_length=32)
     transitions: dict[str, str] = Field(min_length=1, max_length=32)
 
     @model_validator(mode="after")
-    def validate_outcome_policy(self) -> "WorkflowStep":
+    def validate_outcome_policy(self) -> "TaskDefinition":
         """Named verification outcomes must be unique declared transitions."""
         if (
             len(set(self.verified_outcomes)) != len(self.verified_outcomes)
@@ -71,7 +72,14 @@ class WorkflowTemplate(Record):
     limits: ExecutionLimits = Field(default_factory=ExecutionLimits)
     profiles: dict[str, ProviderProfile]
     roles: dict[str, WorkflowRole] = Field(min_length=1, max_length=32)
-    steps: dict[str, WorkflowStep] = Field(min_length=1, max_length=128)
+    tasks: dict[str, TaskDefinition] = Field(
+        min_length=1, max_length=128, validation_alias=AliasChoices("tasks", "steps")
+    )
+
+    @property
+    def steps(self) -> dict[str, TaskDefinition]:
+        """Expose the historical Python name without duplicating task definitions."""
+        return self.tasks
 
     @classmethod
     def parse(cls, text: str) -> "WorkflowTemplate":
@@ -87,7 +95,7 @@ class WorkflowTemplate(Record):
     def from_snapshot(cls, value: dict) -> "WorkflowTemplate":
         """Read earlier immutable snapshots using their original approval-name policy."""
         value = copy.deepcopy(value)
-        for step in value.get("steps", {}).values():
+        for step in value.get("tasks", value.get("steps", {})).values():
             if "verify_input" not in step:
                 step["verify_input"] = False
                 step["verified_outcomes"] = (
@@ -141,8 +149,8 @@ class WorkflowTemplate(Record):
         return self
 
 
-class Task(Record):
-    """Immutable user work shared across every visit in a workflow run."""
+class JobInput(Record):
+    """Immutable job goal shared across all task executions in a workflow run."""
 
     id: str
     title: str = Field(min_length=1, max_length=256)
@@ -157,11 +165,11 @@ class Task(Record):
         return value
 
 
-class StepExecution(Record):
+class TaskExecution(Record):
     """One durable visit; repeated visits always have distinct IDs."""
 
     id: str
-    step: str
+    task: str = Field(validation_alias=AliasChoices("task", "step"), serialization_alias="step")
     participant: str
     status: Literal["waiting", "pending", "acknowledged", "completed", "abandoned"] = "waiting"
     session_id: str | None = None
@@ -177,8 +185,16 @@ class WorkflowRun(Record):
     """Replayable execution progress, separate from provider process liveness."""
 
     id: str
-    task_id: str
+    job_id: str = Field(
+        validation_alias=AliasChoices("job_id", "task_id"), serialization_alias="task_id"
+    )
     status: str = "running"
     active: str | None = None
     executions: list[dict] = Field(default_factory=list)
     reason: str | None = None
+
+
+# Historical imports and serialized journal keys remain readable.
+WorkflowStep = TaskDefinition
+StepExecution = TaskExecution
+Task = JobInput

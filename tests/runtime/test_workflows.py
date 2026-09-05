@@ -81,3 +81,44 @@ class TestExplicitVerificationPolicy:
         legacy = WorkflowTemplate.from_snapshot(data)
         assert legacy.steps["approve"].checks_input("approved")
         assert not legacy.steps["approve"].checks_input("changes_requested")
+
+
+class TestTaskTerminology:
+    """Generic definitions and concrete executions preserve the existing journal format."""
+
+    def test_task_instructions_and_legacy(self) -> None:
+        """Both YAML spellings load while new snapshots expose one task map."""
+        data = copy.deepcopy(HUMAN)
+        data["schema_version"] = 1
+        data["tasks"] = data.pop("steps")
+        data["tasks"]["approve"]["instructions"] = "Review the blast radius of the job changes."
+        template = WorkflowTemplate.model_validate(data)
+        assert template.tasks["approve"].instructions.startswith("Review the blast radius")
+        assert template.tasks is template.steps
+        assert "steps" not in template.model_dump()
+        assert WorkflowTemplate.from_snapshot(template.model_dump()) == template
+
+    def test_execution_replay(self) -> None:
+        """Renamed public models still read and write historical committed keys."""
+        from ctlrm.runtime.workflows import TaskExecution, WorkflowRun
+
+        execution = TaskExecution.model_validate(
+            {"id": "e1", "step": "review", "participant": "reviewer"}
+        )
+        assert execution.task == "review"
+        assert execution.session_id is None
+        assert execution.model_dump(by_alias=True)["step"] == "review"
+        run = WorkflowRun.model_validate({"id": "r1", "task_id": "old-job"})
+        assert run.job_id == "old-job"
+        assert run.model_dump(by_alias=True)["task_id"] == "old-job"
+
+
+class TestLegacyDefault:
+    """Identical pre-upgrade sources retain their submission identity."""
+
+    def test_unversioned_template(self) -> None:
+        """Omitted schema versions still mean v1 for idempotent submission retries."""
+        data = copy.deepcopy(HUMAN)
+        del data["schema_version"]
+        legacy = WorkflowTemplate.from_snapshot(HUMAN)
+        assert WorkflowTemplate.model_validate(data).model_dump() == legacy.model_dump()

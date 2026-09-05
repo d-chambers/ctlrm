@@ -793,3 +793,42 @@ class TestReviewedWorkflowBoundaries:
             client.request("workflow-cancel", {})
             engine.tick()
             assert engine.state["run"]["status"] == "canceled"
+
+
+class TestTaskInstructionsAndUpgrade:
+    """Task prompts and old immutable snapshots remain usable across terminology changes."""
+
+    def test_task_prompt(self, repository, template) -> None:
+        """The actual assignment includes the task lens, separately from role instructions."""
+        template.tasks["implement"].instructions = "Inspect authentication callers before editing."
+        client, _ = WorkflowService.submit(repository, template, "Goal", "Improve authentication")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            prepare(engine, client)
+            body = engine.active()["message"]["body"]
+            assert "Task instructions: Inspect authentication callers before editing." in body
+            assert body in [item.body for item in client.area.room.read_inbox("implementer")]
+
+    def test_pre_upgrade_retry(self, repository, template) -> None:
+        """A historical steps snapshot without instruction fields accepts an identical retry."""
+        import json
+
+        client, request = WorkflowService.submit(
+            repository, template, "Goal", "Build", request_id="same"
+        )
+        old = copy.deepcopy(client.area.data)
+        snapshot = old["definition"]["template"]
+        snapshot["steps"] = snapshot.pop("tasks")
+        for task in snapshot["steps"].values():
+            task.pop("instructions")
+        (repository / ".ctlrm/area.yaml").write_text(json.dumps(old))
+        (repository / ".ctlrm/definition.yaml").write_text(json.dumps(old["definition"]))
+        retried, same = WorkflowService.submit(
+            repository, template, "Goal", "Build", request_id="same"
+        )
+        assert same == request
+        with retried.area.journal.writer():
+            engine = WorkflowEngine(retried.area, FakeTerminal())
+            engine.tick()
+            assert engine.state["run"]["task_id"] == old["definition"]["task"]["id"]

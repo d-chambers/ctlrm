@@ -188,10 +188,10 @@ Acceptance: a single agent needs no task/graph, survives UI closure, and resumes
 
 ### 3. Define reusable workflows and tasks
 
-- [ ] Implement task/template/run/step models and validated transitions in `runtime/workflows.py` and `scheduler.py`, replacing participant-only transition results.
-- [ ] Snapshot a template into a fresh coordination area, bind roles to participants, and initialize the immutable roster.
-- [ ] Expose validate-template, submit-task, inspect-progress, report-outcome, and human-response operations through Typer and services. Choose final command names consistently with the existing CLI.
-- [ ] Implement replayable transition events with recorded outbound IDs/payloads and idempotent publication/acknowledgment; add replay tests immediately.
+- [x] Implement task/template/run/step models and validated transitions in `runtime/workflows.py` and `scheduler.py`, replacing participant-only transition results.
+- [x] Snapshot a template into a fresh coordination area, bind roles to participants, and initialize the immutable roster.
+- [x] Expose validate-template, submit-task, inspect-progress, report-outcome, and human-response operations through Typer and services. Choose final command names consistently with the existing CLI.
+- [x] Implement replayable transition events with recorded outbound IDs/payloads and idempotent publication/acknowledgment; add replay tests immediately.
 
 Acceptance: simulated agents traverse a review loop and human approval. A one-agent workflow works. The same template initializes a second independent worktree without sharing mutable runtime state. An area rejects a second unrelated workflow.
 

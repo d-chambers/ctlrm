@@ -1,22 +1,31 @@
-"""test scheduler.py."""
+"""Transition selection distinguishes completion from unknown outcomes."""
 
-from ctlrm.runtime.workflows import WorkflowGraph
-from ctlrm.scheduler import next_participant
+import pytest
+
+from ctlrm.runtime.workflows import WorkflowTemplate
+from ctlrm.scheduler import transition
 
 
-class TestScheduler:
-    """TestScheduler."""
+class TestTransition:
+    """Explicit terminal results never hide malformed participant reports."""
 
-    def test_routes_matching_edge_to_next_participant(self) -> None:
-        """test routes matching edge to next participant."""
-        workflow = WorkflowGraph.parse(
-            "\nid: implement_review_fix\ntitle: Implement, review, and fix\nnodes:\n  implement:\n    participant: codex-impl\n  review:\n    participant: derrick\nedges:\n  - from: implement\n    to: review\n    when: result\n"
+    def test_outcome(self) -> None:
+        """Known outcomes select destinations; unknown ones raise."""
+        workflow = WorkflowTemplate.model_validate(
+            {
+                "name": "approval",
+                "entry": "review",
+                "profiles": {},
+                "roles": {"owner": {"kind": "human"}},
+                "steps": {
+                    "review": {
+                        "role": "owner",
+                        "transitions": {"approved": "terminal:completed", "again": "review"},
+                    }
+                },
+            }
         )
-        assert next_participant(workflow, "implement", "result") == "derrick"
-
-    def test_done_edge_returns_none(self) -> None:
-        """test done edge returns none."""
-        workflow = WorkflowGraph.parse(
-            "\nid: review\ntitle: Review\nnodes:\n  review:\n    participant: derrick\nedges:\n  - from: review\n    to: done\n    when: approved\n"
-        )
-        assert next_participant(workflow, "review", "approved") is None
+        assert transition(workflow, "review", "approved") == "terminal:completed"
+        assert transition(workflow, "review", "again") == "review"
+        with pytest.raises(ValueError, match="unknown outcome"):
+            transition(workflow, "review", "garbage")

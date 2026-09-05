@@ -1,22 +1,47 @@
-"""test workflows.py."""
+"""Reusable graph validation rejects ambiguous or unrouteable definitions."""
+
+import copy
 
 import pytest
-from ctlrm.runtime.workflows import WorkflowGraph
 
-WORKFLOW = "\nid: implement_review_fix\ntitle: Implement, review, and fix\nnodes:\n  implement:\n    participant: codex-impl\n  review:\n    participant: derrick\nedges:\n  - from: implement\n    to: review\n    when: result\n  - from: review\n    to: done\n    when: approved\n"
+from ctlrm.runtime.workflows import WorkflowTemplate
+
+HUMAN = {
+    "schema_version": 1,
+    "name": "approval",
+    "entry": "approve",
+    "profiles": {},
+    "roles": {"owner": {"kind": "human"}},
+    "steps": {"approve": {"role": "owner", "transitions": {"approved": "terminal:completed"}}},
+}
 
 
-class TestWorkflows:
-    """TestWorkflows."""
+class TestTemplate:
+    """A graph must have explicit outcomes, valid bindings, and a reachable exit."""
 
-    def test_parses_workflow_with_human_participant_node(self) -> None:
-        """test parses workflow with human participant node."""
-        workflow = WorkflowGraph.parse(WORKFLOW)
-        assert workflow.nodes["review"].participant == "derrick"
+    def test_single_human(self) -> None:
+        """A one-step workflow needs neither a synthetic agent nor a profile."""
+        assert WorkflowTemplate.model_validate(HUMAN).entry == "approve"
 
-    def test_rejects_unknown_edge_node(self) -> None:
-        """test rejects unknown edge node."""
-        with pytest.raises(ValueError, match="unknown to node"):
-            WorkflowGraph.parse(
-                "\nid: broken\ntitle: Broken\nnodes:\n  implement:\n    participant: codex-impl\nedges:\n  - from: implement\n    to: review\n    when: result\n"
-            )
+    @pytest.mark.parametrize("change", ["entry", "destination", "role", "unreachable", "no_exit"])
+    def test_invalid_graph(self, change) -> None:
+        """Broken references and permanently cycling definitions fail at validation."""
+        data = copy.deepcopy(HUMAN)
+        if change == "entry":
+            data["entry"] = "missing"
+        elif change == "destination":
+            data["steps"]["approve"]["transitions"]["approved"] = "missing"
+        elif change == "role":
+            data["steps"]["approve"]["role"] = "missing"
+        elif change == "unreachable":
+            data["steps"]["unused"] = copy.deepcopy(data["steps"]["approve"])
+        else:
+            data["steps"]["approve"]["transitions"]["approved"] = "approve"
+        with pytest.raises(ValueError):
+            WorkflowTemplate.model_validate(data)
+
+    @pytest.mark.parametrize("text", ["name: a\nname: b", "roles: {true: {kind: human}}"])
+    def test_ambiguous_yaml(self, text) -> None:
+        """Duplicate and implicitly boolean YAML keys cannot change graph meaning."""
+        with pytest.raises(ValueError):
+            WorkflowTemplate.parse(text)

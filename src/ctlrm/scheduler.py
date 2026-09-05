@@ -1,28 +1,23 @@
-"""Workflow scheduling helpers."""
+"""Pure workflow transition selection; persistence belongs to the supervisor."""
 
-from ctlrm.runtime.workflows import WorkflowGraph
+from ctlrm.runtime.workflows import WorkflowTemplate
 
 
-def next_participant(workflow: WorkflowGraph, current_node: str, event: str) -> str | None:
-    """Return the participant selected by a workflow transition.
+def transition(workflow: WorkflowTemplate, step: str, outcome: str) -> str:
+    """Return a step or explicit terminal, rejecting unknown outcomes.
 
     Parameters
     ----------
     workflow
-        Workflow graph to inspect.
-    current_node
-        Node where the event occurred.
-    event
-        Transition event name.
-
-    Returns
-    -------
-    str | None
-        Next participant id, or ``None`` when the workflow is done or no edge matches.
+        Immutable template snapshot.
+    step
+        Current step name.
+    outcome
+        Participant's structured business outcome.
     """
-    for edge in workflow.edges:
-        if edge.from_ == current_node and edge.when == event:
-            if edge.to == "done":
-                return None
-            return workflow.nodes[edge.to].participant
-    return None
+    if step not in workflow.steps:
+        raise ValueError("unknown active step")
+    destination = workflow.steps[step].transitions.get(outcome)
+    if destination is None:
+        raise ValueError(f"unknown outcome {outcome!r} for step {step!r}")
+    return destination

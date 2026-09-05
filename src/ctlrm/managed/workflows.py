@@ -84,7 +84,9 @@ class WorkflowService(SessionService):
                 "job": job.model_dump(),
                 "run_id": identifier("run"),
                 "submission_id": submission_id,
-                "base_commit": git(root, "rev-parse", "HEAD"),
+                "base_commit": git(root, "rev-parse", "HEAD")
+                if any(task.specialist_above_lines for task in template.tasks.values())
+                else None,
             }
             roles = {
                 bindings[key]: {"name": bindings[key], "role": key, **role.model_dump()}
@@ -198,12 +200,12 @@ class WorkflowEngine(SessionEngine):
             raise ValueError("specialists must be a list of task names")
         if len(set(selected)) != len(selected) or set(selected) - set(task.specialist_tasks):
             raise ValueError("specialist request is duplicate or outside the workflow allowlist")
-        if selected and (
-            outcome != "approved"
-            or not isinstance(payload.get("specialist_reason"), str)
-            or not payload["specialist_reason"].strip()
-            or len(payload["specialist_reason"]) > 4096
+        reason = payload.get("specialist_reason")
+        if reason is not None and (
+            not isinstance(reason, str) or not reason.strip() or len(reason) > 4096
         ):
+            raise ValueError("specialist reason must be nonblank and at most 4096 characters")
+        if selected and (outcome != "approved" or reason is None):
             raise ValueError("specialist requests require an approved outcome and a bounded reason")
         if outcome != "approved":
             return []
@@ -333,19 +335,32 @@ class WorkflowEngine(SessionEngine):
                 summary=reason,
             )
             incoming["artifact"] = capture(self.area, self.state["run"]["id"], execution["id"])
-            if self.template.tasks[execution["task"]].optional:
-                before_version = read_record(
-                    self.area.room.root / "artifacts" / f"{incoming['previous_artifact']}.json"
-                )["version"]
-                after_version = read_record(
-                    self.area.room.root / "artifacts" / f"{incoming['artifact']}.json"
-                )["version"]
-                if before_version != after_version:
+            before_version = read_record(
+                self.area.room.root / "artifacts" / f"{incoming['previous_artifact']}.json"
+            )["version"]
+            after_version = read_record(
+                self.area.room.root / "artifacts" / f"{incoming['artifact']}.json"
+            )["version"]
+            if before_version != after_version:
+                if self.template.tasks[execution["task"]].optional:
                     destination = self.template.tasks[execution["task"]].transitions[
                         "changes_requested"
                     ]
                     incoming["invalidated_specialist_context"] = incoming.pop("specialist_context")
                     incoming.pop("reviews", None)
+                elif any(
+                    prior["outcome"] == "approved"
+                    and self.template.tasks[prior["task"]].checks_input("approved")
+                    and read_record(
+                        self.area.room.root / "artifacts" / f"{prior['artifact']}.json"
+                    )["version"]
+                    == before_version
+                    for prior in self.state["run"]["executions"]
+                ):
+                    raise ValueError(
+                        "retry would invalidate completed reviews; restore the reviewed version "
+                        "and report the workflow's fix outcome, or cancel and start a new job"
+                    )
         reason_limit = self._execution_limit(destination)
         if reason_limit:
             raise ValueError(reason_limit + "; cancel or use a fresh worktree")

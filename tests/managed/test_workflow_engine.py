@@ -8,6 +8,7 @@ import pytest
 from ctlrm.managed.workflows import WorkflowEngine, WorkflowService
 from ctlrm.runtime.workflows import WorkflowTemplate
 from conftest import FakeTerminal
+from test_projects import human_template as human_template
 
 
 @pytest.fixture
@@ -874,3 +875,40 @@ class TestFreshRetry:
             client.ready(session["id"], session["generation"], session["native_id"])
             engine.tick()
             assert engine.active()["session_id"] == session["id"]
+
+
+class TestInitialCommitWorkflow:
+    """A direct bootstrap job can create the codebase's initial commit."""
+
+    def test_unborn_submission(self, tmp_path, human_template) -> None:
+        """A template without size policies needs HEAD only when it reports its output."""
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)], check=True, capture_output=True
+        )
+        client, _ = WorkflowService.submit(tmp_path, human_template, "Initialize", "Create code")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            assert engine.active()["task"] == "work"
+            (tmp_path / "source.txt").write_text("initial\n")
+            subprocess.run(
+                ["git", "-C", str(tmp_path), "add", "source.txt"], check=True, capture_output=True
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(tmp_path),
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.test",
+                    "commit",
+                    "-m",
+                    "Initial",
+                ],
+                check=True,
+                capture_output=True,
+            )
+            complete(engine, client, "done")
+            assert engine.state["run"]["status"] == "completed"

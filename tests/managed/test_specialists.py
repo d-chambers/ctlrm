@@ -265,3 +265,45 @@ class TestSpecialistVersionRetry:
             reviews.mkdir()
             (reviews / "findings.md").write_text("No findings.\n")
             assert fingerprint(repository) == before
+
+
+class TestCompletedReviewProvenance:
+    """Approvals remain attributable even after control returns to the normal graph."""
+
+    def test_changed_continuation_retry(self, repository, specialist_template) -> None:
+        """An extra non-review handoff cannot let retry certify a different code version."""
+        specialist_template.tasks["finish"].transitions = {"done": "publish"}
+        specialist_template.tasks["publish"] = specialist_template.tasks["finish"].model_copy(
+            deep=True
+        )
+        specialist_template.tasks["publish"].transitions = {"done": "terminal:completed"}
+        client, _ = WorkflowService.submit(repository, specialist_template, "Goal", "Inspect")
+        client.join("owner")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            report(engine, client, "approved", specialists=["performance"], specialist_reason="x")
+            report(engine, client, "approved")
+            report(engine, client, "done")
+            execution = engine.active()["id"]
+            (repository / "source.txt").write_text("unreviewed changes\n")
+            request = client.request(
+                "workflow-retry", {"execution_id": execution, "reason": "Refresh"}
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "rejected"
+            assert "invalidate completed reviews" in engine.state["requests"][request]["error"]
+            assert engine.active()["id"] == execution
+            assert report(engine, client, "done")["status"] == "rejected"
+
+    @pytest.mark.parametrize("reason", ["x" * 4097, 42, " "])
+    def test_automatic_reason_bounds(self, repository, specialist_template, reason) -> None:
+        """Automatic specialist selection cannot introduce an unbounded assignment reason."""
+        specialist_template.tasks["review"].specialist_above_lines = {"performance": 0}
+        client, _ = WorkflowService.submit(repository, specialist_template, "Goal", "Inspect")
+        client.join("owner")
+        (repository / "source.txt").write_text("changed\n")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            result = report(engine, client, "approved", specialist_reason=reason)
+            assert result["status"] == "rejected"
+            assert engine.active()["task"] == "review"

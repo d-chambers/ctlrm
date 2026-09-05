@@ -457,7 +457,7 @@ class ProjectStore:
         with self.locked(project_id) as journal:
             state = journal.replay()[0]
             existing = state.get("archive")
-            if existing:
+            if existing and Path(existing["path"]).exists():
                 if output is not None and str(output.resolve()) != existing["path"]:
                     raise ValueError("project is already archived at another path")
                 manifest = verify_archive(Path(existing["path"]))
@@ -477,8 +477,13 @@ class ProjectStore:
                 )
             result = archive(
                 self.project_path(project_id),
-                output or self.root / "archives" / f"{project_id}.zip",
+                output
+                or (
+                    Path(existing["path"])
+                    if existing
+                    else self.root / "archives" / f"{project_id}.zip"
+                ),
             )
             state.update(project_status="archived", archive=result)
-            journal.commit(state, "project-archived", result)
+            journal.commit(state, "project-archived", {"archive": result, "supersedes": existing})
             return result

@@ -338,3 +338,203 @@ class TestProjectArchive:
         assert result.returncode != 0
         assert b"unsupported or oversized archive file" in result.stderr
         assert not (tmp_path / "archive.zip").exists()
+
+    def test_rebuild_deleted_archive(self, store, human_template, tmp_path) -> None:
+        """Missing ZIP recovery preserves the superseded identity in project history."""
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        finish(client)
+        original = store.archive("auth")
+        Path(original["path"]).unlink()
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                store.project("auth").codebase,
+                "worktree",
+                "remove",
+                "--force",
+                str(client.area.root),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        assert not client.area.root.exists()
+        rebuilt = store.archive("auth", tmp_path / "rebuilt.zip")
+        assert rebuilt["path"] != original["path"]
+        assert rebuilt["sha256"] != original["sha256"]
+        assert verify_archive(Path(rebuilt["path"]))["project_id"] == "auth"
+        assert store.status("auth")["archive"] == rebuilt
+        assert store.archive("auth") == rebuilt
+        assert original["sha256"] in "".join(
+            p.read_text() for p in (store.project_path("auth") / "control/events").glob("*.json")
+        )
+
+    def test_self_consistent_zip_tamper(self, store, human_template, tmp_path) -> None:
+        """Internal ZIP checksums cannot override the externally committed archive identity."""
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        finish(client)
+        result = store.archive("auth")
+        path = Path(result["path"])
+        with pytest.raises(ValueError, match="another path"):
+            store.archive("auth", tmp_path / "other.zip")
+        edited = tmp_path / "edited.zip"
+        with zipfile.ZipFile(path) as source, zipfile.ZipFile(edited, "w") as output:
+            manifest = json.loads(source.read("archive-manifest.json"))
+            for item in source.infolist():
+                if item.filename == "archive-manifest.json":
+                    continue
+                content = source.read(item.filename)
+                if item.filename == "jobs/a/job.json":
+                    content += b" "
+                    manifest["files"][item.filename] = hashlib.sha256(content).hexdigest()
+                output.writestr(item, content)
+            output.writestr("archive-manifest.json", json.dumps(manifest))
+        edited.replace(path)
+        assert verify_archive(path)["project_id"] == "auth"
+        with pytest.raises(ValueError, match="identity differs"):
+            store.archive("auth")
+
+    def test_recovery_rejects_changed_records(self, store, human_template, monkeypatch) -> None:
+        """An existing ZIP cannot recover an interrupted publication if its source differs."""
+        from ctlrm.managed.storage import Journal
+
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        finish(client)
+        original = Journal.commit
+
+        def crash(self, state, kind, detail=None):
+            """Interrupt after publication and before the archive identity is accepted."""
+            if kind == "project-archived":
+                raise RuntimeError("interrupted")
+            return original(self, state, kind, detail)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Journal, "commit", crash)
+            with pytest.raises(RuntimeError, match="interrupted"):
+                store.archive("auth")
+        path = store.root / "archives/auth.zip"
+        before = path.read_bytes()
+        (store.project_path("auth") / "unexpected.txt").write_text("later record")
+        with pytest.raises(ValueError, match="does not match"):
+            store.archive("auth")
+        assert path.read_bytes() == before
+
+    @pytest.mark.parametrize("timeout", [False, True])
+    def test_complete_waits_for_supervisor(
+        self, store, human_template, profile, monkeypatch, timeout
+    ) -> None:
+        """Completion waits for actual retirement and lock release, or reports pending work."""
+        import itertools
+        import threading
+        import time
+        from types import SimpleNamespace
+        from ctlrm.communication.terminal import StopPending
+        from ctlrm.managed import projects
+        from ctlrm.managed.workflows import WorkflowEngine
+        from conftest import FakeTerminal
+        from test_workflow_engine import complete
+
+        release = threading.Event()
+        entered = threading.Event()
+        errors = []
+        pauses = []
+
+        class WaitingTerminal(FakeTerminal):
+            """Delay process termination until the simulated provider actually exits."""
+
+            def stop(self, spec, identity):
+                """A stop intent alone cannot certify process death."""
+                if not release.is_set():
+                    raise StopPending("provider still exiting")
+                super().stop(spec, identity)
+
+        human_template.profiles = {"agent": profile}
+        human_template.roles["owner"].kind = "agent"
+        human_template.roles["owner"].profile = "agent"
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        terminal = WaitingTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            complete(engine, client, "done")
+
+        def serve():
+            """Run the real workflow state machine under the real supervisor lock."""
+            try:
+                with client.area.journal.writer():
+                    current = WorkflowEngine(client.area, terminal)
+                    entered.set()
+                    while not current.state["shutdown"]:
+                        current.tick()
+                        time.sleep(0.01)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=serve)
+
+        def start(area):
+            """Replace only detached process creation with an inspectable test thread."""
+            assert area.root == client.area.root
+            thread.start()
+            assert entered.wait(3)
+
+        def pause(duration):
+            """Record actual entry into the project's retirement wait."""
+            pauses.append(duration)
+            if not timeout:
+                release.set()
+            time.sleep(0.01)
+
+        counter = itertools.count(step=100)
+        clock = (lambda: next(counter)) if timeout else time.monotonic
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(supervisor, "start", start)
+                patch.setattr(projects, "time", SimpleNamespace(monotonic=clock, sleep=pause))
+                if timeout:
+                    with pytest.raises(RuntimeError, match="retirement is still pending"):
+                        store.complete("auth")
+                    assert not (store.job_path("auth", "a") / "retained").exists()
+                else:
+                    assert store.complete("auth")["status"] == "completed"
+                    assert pauses
+                    assert client.area.journal.replay()[0]["retired"]
+                    assert not supervisor.running(client.area)
+                    assert not terminal.terminals
+        finally:
+            release.set()
+            if thread.ident is not None:
+                thread.join(3)
+        assert not errors and not thread.is_alive()
+
+    def test_supervisor_retires_before_start_poll(self, store, human_template, monkeypatch) -> None:
+        """A daemon can consume pending retirement and exit before start sees its lock."""
+        from types import SimpleNamespace
+        from ctlrm.managed.workflows import WorkflowEngine
+        from conftest import FakeTerminal
+
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        finish(client)
+        client.request("workflow-retire", {})
+
+        def popen(*args, **kwargs):
+            """Complete the child's work before the parent's first liveness observation."""
+            with client.area.journal.writer():
+                engine = WorkflowEngine(client.area, FakeTerminal())
+                engine.tick()
+                assert engine.state["retired"]
+            return SimpleNamespace(returncode=0, poll=lambda: 0)
+
+        monkeypatch.setattr(
+            supervisor,
+            "subprocess",
+            SimpleNamespace(Popen=popen, DEVNULL=supervisor.subprocess.DEVNULL),
+        )
+        supervisor.start(client.area)
+        assert client.area.journal.replay()[0]["retired"]
+        assert not supervisor.running(client.area)

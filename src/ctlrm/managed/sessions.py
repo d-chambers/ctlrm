@@ -20,14 +20,16 @@ def mailbox(area: Area, participant: str, message: dict) -> None:
     """Publish a committed managed message, including bootstrap before signature claim."""
     if participant not in area.data["roles"]:
         raise ValueError("recipient is outside the immutable managed roster")
-    area.room.init_participant(participant)
     item = MailboxMessage.model_validate(message)
     path = area.room.root / "participants" / participant / "inbox" / f"{item.id}.md"
-    try:
-        _write_exclusive_atomic(path, item.to_markdown())
-    except FileExistsError:
-        if MailboxMessage.read(path) != MailboxMessage.parse(item.to_markdown()):
-            raise ValueError(f"conflicting managed mailbox record: {path}")
+    if not path.exists():
+        area.room.init_participant(participant)
+        try:
+            _write_exclusive_atomic(path, item.to_markdown())
+        except FileExistsError:
+            pass
+    if MailboxMessage.read(path) != MailboxMessage.parse(item.to_markdown()):
+        raise ValueError(f"conflicting managed mailbox record: {path}")
 
 
 def message(participant: str, kind: str, body: str, message_id: str | None = None) -> dict:

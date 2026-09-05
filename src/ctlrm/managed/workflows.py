@@ -45,6 +45,8 @@ class WorkflowService(SessionService):
                 raise ValueError("coordinator is reserved")
         profiles = {}
         runtime = runtime_path(root)
+        if runtime != root / ".ctlrm" and job_id is None:
+            raise ValueError("central jobs must be submitted through job start")
         for key, value in template.profiles.items():
             checked = value.checked()
             if runtime != root / ".ctlrm" and checked.provider in {"codex", "claude"}:

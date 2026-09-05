@@ -3,14 +3,18 @@
 from pathlib import Path
 
 
-def runtime_path(root: Path) -> Path:
+def runtime_path(root: Path, *, managed: bool = True) -> Path:
     """Resolve a bounded locator without treating arbitrary symlinks as runtime roots."""
     local = root / ".ctlrm"
     if local.is_symlink():
-        raise ValueError("coordination runtime must not be a symlink")
+        if managed:
+            raise ValueError("coordination runtime must not be a symlink")
+        return local
     locator = local / "location.json"
     if not locator.exists():
-        if (root / ".scratch/ctlrm").is_symlink():
+        if (root / ".scratch/ctlrm").is_symlink() and (
+            managed or (root / ".scratch/ctlrm/job.json").is_file()
+        ):
             raise ValueError("central runtime locator is missing; retry job start to repair")
         return local
     if locator.is_symlink() or locator.stat().st_size > 8192:

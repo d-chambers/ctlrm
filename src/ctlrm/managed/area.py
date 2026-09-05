@@ -92,6 +92,15 @@ class Area:
         root, branch = worktree(path)
         if (root / ".ctlrm").is_symlink():
             raise ValueError("coordination runtime must not be a symlink")
+        runtime = runtime_path(root)
+        if runtime != root / ".ctlrm":
+            job = read_record(runtime.parent / "job.json")
+            if (
+                mode != "workflow"
+                or not definition
+                or definition.get("task", {}).get("id") != job["id"]
+            ):
+                raise ValueError("central job area requires its planned workflow")
         journal = Journal(root)
         spec = {
             "mode": mode,

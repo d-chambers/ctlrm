@@ -1,9 +1,12 @@
 """Central project planning and job provisioning over the existing workflow supervisor."""
 
+from __future__ import annotations
+
 from contextlib import contextmanager
 import os
 from pathlib import Path
 import sys
+import time
 from typing import Iterator
 
 from ctlrm.managed.area import git, ignore_runtime, worktree
@@ -65,11 +68,31 @@ class ProjectStore:
         )
 
     @contextmanager
+    def locked(self, project_id: str) -> Iterator[Journal]:
+        """Wait briefly for competing project changes using a project-specific diagnostic."""
+        journal = self.journal(project_id)
+        deadline = time.monotonic() + 5
+        while True:
+            lock = journal.writer(purpose="project")
+            try:
+                lock.__enter__()
+                break
+            except RuntimeError as error:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"project {project_id} is busy; retry the operation"
+                    ) from error
+                time.sleep(0.05)
+        try:
+            yield journal
+        finally:
+            lock.__exit__(None, None, None)
+
+    @contextmanager
     def editing(self, project_id: str) -> Iterator[tuple[Journal, dict]]:
         """Serialize project changes and forbid mutation after completion/archive."""
         self.project(project_id)
-        journal = self.journal(project_id)
-        with journal.writer(purpose="project"):
+        with self.locked(project_id) as journal:
             state = journal.replay()[0]
             if state.get("project_status", "active") != "active":
                 raise ValueError("project is completed or archived")
@@ -99,10 +122,20 @@ class ProjectStore:
 
     def list(self) -> list[dict]:
         """List centrally discoverable projects without launching anything."""
-        return [
-            self.status(path.parent.name)
-            for path in sorted((self.root / "projects").glob("*/project.json"))
-        ]
+        result = []
+        for path in sorted((self.root / "projects").glob("*/project.json")):
+            try:
+                result.append(self.status(path.parent.name))
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                result.append(
+                    {
+                        "project": {"id": path.parent.name},
+                        "status": "invalid",
+                        "error": str(error),
+                        "jobs": [],
+                    }
+                )
+        return result
 
     def add_job(
         self,
@@ -131,6 +164,10 @@ class ProjectStore:
             for dependency in job.depends_on:
                 self.job(project_id, dependency)
             publish(self.job_path(project_id, job.id) / "job.json", job.model_dump())
+            publish(
+                self.job_path(project_id, job.id) / "project-context.json",
+                self.project(project_id).model_dump(),
+            )
         return job
 
     def job_status(self, project_id: str, job_id: str) -> dict:
@@ -138,7 +175,19 @@ class ProjectStore:
         job = self.job(project_id, job_id)
         path = self.job_path(project_id, job_id)
         launch = read_record(path / "launch.json") if (path / "launch.json").exists() else None
-        state = Journal(path, storage_root=path / "runtime").replay()[0]
+        try:
+            state = Journal(path, storage_root=path / "runtime").replay()[0]
+        except (ValueError, OSError) as error:
+            return {
+                "job": job.model_dump(),
+                "launch": launch,
+                "status": "invalid",
+                "error": str(error),
+                "pr": self.journal(project_id).replay()[0].get("pull_requests", {}).get(job_id),
+                "run": None,
+                "sessions": {},
+                "paused": str(error),
+            }
         run = state.get("run")
         return {
             "job": job.model_dump(),
@@ -154,10 +203,19 @@ class ProjectStore:
         """Return goals and jobs without conflating job completion with project completion."""
         project = self.project(project_id)
         state = self.journal(project_id).replay()[0]
-        jobs = [
-            self.job_status(project_id, p.parent.name)
-            for p in sorted((self.project_path(project_id) / "jobs").glob("*/job.json"))
-        ]
+        jobs = []
+        for path in sorted((self.project_path(project_id) / "jobs").glob("*/job.json")):
+            try:
+                jobs.append(self.job_status(project_id, path.parent.name))
+            except (ValueError, OSError, KeyError, TypeError) as error:
+                jobs.append(
+                    {
+                        "job": {"id": path.parent.name},
+                        "status": "invalid",
+                        "error": str(error),
+                        "pr": None,
+                    }
+                )
         return {
             "project": project.model_dump(),
             "status": state.get("project_status", "active"),
@@ -225,6 +283,11 @@ class ProjectStore:
                 if not launch["create"]:
                     raise ValueError("bound worktree is missing")
                 target.parent.mkdir(parents=True, exist_ok=True)
+                registered = git(
+                    Path(project.codebase), "worktree", "list", "--porcelain"
+                ).splitlines()
+                if f"worktree {target}" in registered:
+                    git(Path(project.codebase), "worktree", "remove", "--force", str(target))
                 existing_branch = git(
                     Path(project.codebase),
                     "for-each-ref",
@@ -233,11 +296,14 @@ class ProjectStore:
                 )
                 if existing_branch:
                     if (
-                        git(Path(project.codebase), "rev-parse", f"refs/heads/{launch['branch']}")
+                        not (path / "runtime/area.yaml").exists()
+                        and git(
+                            Path(project.codebase), "rev-parse", f"refs/heads/{launch['branch']}"
+                        )
                         != launch["base_commit"]
                     ):
                         raise ValueError(
-                            "partially created job branch changed; restore its recorded base before retrying"
+                            "uninitialized job branch differs from its planned base; inspect it before retrying"
                         )
                     git(Path(project.codebase), "worktree", "add", str(target), launch["branch"])
                 else:
@@ -258,16 +324,12 @@ class ProjectStore:
             ):
                 raise ValueError("worktree identity changed")
             self._bind(resolved, path)
+            publish(path / "project-context.json", project.model_dump())
             return WorkflowService.submit(
                 resolved,
                 job.workflow,
                 job.title,
-                job.instructions
-                + (
-                    "\n\nAcceptance criteria:\n" + "\n".join("- " + a for a in job.acceptance)
-                    if job.acceptance
-                    else ""
-                ),
+                job.execution_instructions(),
                 request_id=f"start-{job.id}",
                 job_id=job.id,
             )

@@ -17,7 +17,7 @@ class ProjectRuntime:
     @property
     def root(self) -> Path:
         """Resolve storage only for operations that need a local runtime."""
-        return runtime_path(self.project_root)
+        return runtime_path(self.project_root, managed=False)
 
     def init_project(self) -> None:
         """Create project runtime directories."""

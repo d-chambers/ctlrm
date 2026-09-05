@@ -287,3 +287,100 @@ class TestBindingRecovery:
         before = fingerprint(repository)
         scratch.write_text("second")
         assert fingerprint(repository) != before
+
+
+class TestReviewedProjectBoundaries:
+    """Counterpart review regressions cover lost trees, concurrency, and corrupt neighbors."""
+
+    def test_restore_committed_work(self, store, human_template) -> None:
+        """Recreating a missing managed worktree keeps its branch tip and accepted identity."""
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        client, _ = store.start_job("auth", "a")
+        root = client.area.root
+        (root / "source.txt").write_text("committed job work\n")
+        subprocess.run(
+            ["git", "-C", str(root), "add", "source.txt"], check=True, capture_output=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "-m",
+                "Job work",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(root), "worktree", "remove", "--force", str(root)],
+            check=True,
+            capture_output=True,
+        )
+        restored, _ = store.start_job("auth", "a")
+        assert (restored.area.root / "source.txt").read_text() == "committed job work\n"
+        assert restored.area.data["id"] == client.area.data["id"]
+
+    def test_oversize_rejected_before_plan(self, store, human_template) -> None:
+        """The complete prompt, including acceptance criteria, is validated before publication."""
+        with pytest.raises(ValueError, match="65536"):
+            store.add_job(
+                "auth", "A", "x" * 60000, human_template, job_id="a", acceptance=["y" * 6000]
+            )
+        assert not (store.job_path("auth", "a") / "job.json").exists()
+
+    def test_concurrent_start(self, store, human_template) -> None:
+        """Two concurrent retries wait on the project lock and return one logical submission."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: store.start_job("auth", "a"), range(2)))
+        assert results[0][1] == results[1][1]
+        assert results[0][0].area.data == results[1][0].area.data
+
+    def test_foreign_submission_after_binding(self, store, human_template, monkeypatch) -> None:
+        """A crash after binding leaves the runtime reserved for its planned job."""
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        with monkeypatch.context() as patch:
+
+            def crash(*args, **kwargs):
+                """Interrupt initialization after the locator is written."""
+                raise RuntimeError("interrupted")
+
+            patch.setattr(WorkflowService, "submit", crash)
+            with pytest.raises(RuntimeError, match="interrupted"):
+                store.start_job("auth", "a")
+        root = Path(store.job_status("auth", "a")["launch"]["root"])
+        with pytest.raises(ValueError, match="through job start"):
+            WorkflowService.submit(root, human_template, "Foreign", "Other")
+        client, _ = store.start_job("auth", "a")
+        assert client.area.data["definition"]["task"]["id"] == "a"
+
+    def test_corrupt_neighbor_search(self, store, human_template) -> None:
+        """An invalid runtime is visible without hiding unrelated PR matches."""
+        for name, number in [("a", 42), ("b", 43)]:
+            store.add_job("auth", name, "x", human_template, job_id=name)
+            store.assign_pr("auth", name, number, "owner/repo")
+        client, _ = store.start_job("auth", "a")
+        finish(client)
+        event = sorted((client.area.room.root / "events").glob("*.json"))[-1]
+        event.write_text("{}")
+        assert store.job_status("auth", "a")["status"] == "invalid"
+        assert store.find_pr(43)[0]["job"]["id"] == "b"
+        assert store.list()[0]["jobs"][0]["status"] == "invalid"
+
+    def test_legacy_symlink_layout(self, repository, tmp_path) -> None:
+        """Non-managed runtime clients retain historical symlink support."""
+        from ctlrm.runtime import ProjectRuntime
+
+        target = tmp_path / "legacy-data"
+        target.mkdir()
+        (repository / ".ctlrm").symlink_to(target, target_is_directory=True)
+        ProjectRuntime(repository).init_participant("worker")
+        assert (target / "participants/worker/inbox").is_dir()

@@ -60,7 +60,21 @@ class Job(JobInput):
             raise ValueError("acceptance criteria must be nonblank and bounded")
         if not self.base or self.base.startswith("-") or len(self.base) > 256:
             raise ValueError("base must be a bounded Git revision")
+        JobInput(id=self.id, title=self.title, instructions=self.execution_instructions())
         return self
+
+    def execution_instructions(self) -> str:
+        """Compose bounded job instructions before publishing any launch side effects."""
+        criteria = (
+            "\n\nAcceptance criteria:\n" + "\n".join("- " + item for item in self.acceptance)
+            if self.acceptance
+            else ""
+        )
+        return (
+            self.instructions
+            + criteria
+            + "\n\nProject goals and design: .scratch/ctlrm/project-context.json. Work only on this job goal."
+        )
 
 
 class PullRequest(Record):

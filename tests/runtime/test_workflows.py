@@ -88,7 +88,7 @@ class TestExamples:
         """Validate examples through the same strict parser used at submission."""
         from pathlib import Path
 
-        path = Path(__file__).resolve().parents[2] / "examples" / f"{name}.yaml"
+        path = Path(__file__).resolve().parents[2] / "src/ctlrm/web/templates" / f"{name}.yaml"
         template = WorkflowTemplate.parse(path.read_text())
         if name == "ship":
             assert (

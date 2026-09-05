@@ -270,7 +270,7 @@ class TmuxTerminal:
             "-S",
             identity["socket_path"],
             "attach-session",
-            *(["-r"] if readonly else []),
+            *(["-f", "read-only"] if readonly else []),
             "-t",
             session.session_id,
         ]

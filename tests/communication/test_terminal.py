@@ -163,3 +163,69 @@ class TestInteractiveAttach:
             if descriptor is not None:
                 os.close(descriptor)
             terminal.server.cmd("kill-server")
+
+
+class TestReadonlyAttachment:
+    """Native output viewers remain resizable without accepting terminal keyboard input."""
+
+    def test_readonly_resize(self, tmp_path: Path) -> None:
+        """Read-only attachment must not also set tmux's ignore-size flag."""
+        import fcntl
+        import os
+        import pty
+        import struct
+        import subprocess
+        import termios
+
+        token = uuid4().hex
+        terminal = TmuxTerminal(token)
+        spec = {
+            "id": "session-readonly",
+            "participant": "agent",
+            "generation": 1,
+            "area_id": token,
+            "root": str(tmp_path),
+            "token": token,
+            "terminal_name": "readonly-test",
+            "argv": [
+                sys.executable,
+                "-u",
+                "-c",
+                "import sys; print('READY'); [print('INPUT:'+line, flush=True) for line in sys.stdin]",
+            ],
+        }
+        publish(tmp_path / ".ctlrm/sessions/session-readonly/launch-1.json", spec)
+        master, slave = pty.openpty()
+        client = None
+        try:
+            identity = terminal.ensure(spec)
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 42, 158, 0, 0))
+            command = terminal.attach_command(spec, identity, readonly=True)
+            client = subprocess.Popen(
+                [sys.executable, "-m", "ctlrm.web.terminal", *command],
+                stdin=slave,
+                stdout=slave,
+                stderr=slave,
+                start_new_session=True,
+                env={**os.environ, "TERM": "xterm-256color", "TMUX": ""},
+            )
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                size = terminal.server.cmd(
+                    "display-message", "-p", "-t", identity["pane"], "#{pane_width}"
+                ).stdout
+                if size == ["158"]:
+                    break
+                time.sleep(0.02)
+            assert size == ["158"]
+            os.write(master, b"must-not-reach-agent\r")
+            time.sleep(0.1)
+            assert "INPUT:must-not-reach-agent" not in terminal.capture(spec, identity)
+            assert terminal.health(spec, identity) == "running"
+        finally:
+            if client is not None:
+                client.terminate()
+                client.wait(timeout=5)
+            os.close(master)
+            os.close(slave)
+            terminal.server.cmd("kill-server")

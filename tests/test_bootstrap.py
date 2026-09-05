@@ -15,7 +15,7 @@ class TestBootstrap:
             "ctlrm.__main__",
             "ctlrm.agents.launcher",
             "ctlrm.communication.tmux",
-            "ctlrm.gui.app",
+            "ctlrm.web.app",
             "ctlrm.runtime.room",
         ]:
             importlib.import_module(module)

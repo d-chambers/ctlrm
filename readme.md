@@ -1,6 +1,12 @@
 # ctlrm
 
-Control room coordinates CLI agents and human participants through a shared directory. The CLI manages background Codex and Claude sessions, native recovery, reusable sequential workflows, review loops, and human response steps. Projects organize improvements to a codebase; each job uses its own Git worktree and branch to execute a workflow. Standalone managed sessions are also supported. The TUI is deferred pending design; see the [plan](docs/superpowers/plans/2026-09-05-background-agent-workflows.md).
+Control room coordinates CLI agents and human participants through a shared directory. The CLI manages background Codex and Claude sessions, native recovery, reusable sequential workflows, review loops, and human response steps. Projects organize improvements to a codebase; each job uses its own Git worktree and branch to execute a workflow. Standalone managed sessions are also supported. The local web workbench provides project and participant tabs, workflow graphs, human responses, artifacts, code browsing, and direct access to managed agent sessions.
+
+## Open the workbench
+
+Run `uv run ctlrm serve` and open the complete loopback URL printed in the terminal. Installed packages use `ctlrm serve`. The browser uses the same central project records as the CLI; `--data PATH` selects an isolated store and `--port PORT` changes the default port 8766. The server binds only to `127.0.0.1`. Its generated access capability is carried in the initial URL fragment, removed from the address bar, and retained for that browser tab.
+
+Create a project, add a job using a packaged workflow or custom YAML, then explicitly start it. Opening an agent terminal attaches to its existing tmux session. Interactive providers accept direct keyboard input; native Codex sessions use a conversation message composer between turns. Closing the terminal or browser leaves the agent running. Drag the sidebar divider or terminal divider, or focus a divider and use arrow keys; Full screen and Escape preserve the same terminal view. See the [web workbench guide](docs/web-workbench.md) for controls and boundaries.
 
 ## Data model
 
@@ -18,23 +24,23 @@ An **execution** records the task's inputs, participant/session assignment, stat
 
 Projects can contain dependent jobs, each with an immutable workflow snapshot and its own worktree/branch. PR identity belongs to the job: assign a repository and PR number, then search by number with an optional repository filter. Workflow completion, PR merge, project completion, and archival are distinct milestones.
 
-The OS-specific user data directory owns durable project and job records. Each job worktree exposes its records through `.scratch/ctlrm`, a symlink into the central job directory. See [project/job commands, storage, and PR lookup](docs/projects.md) and the [backend implementation plan](docs/superpowers/plans/2026-09-05-project-jobs.md). Workflows can request bounded specialist-review tasks from a predefined allowlist. The [ship workflow](examples/ship.yaml) uses review lenses, fresh reviewer sessions, PR publication, and CI/review handling; the [single-agent workflow](examples/single-agent.yaml) keeps simple jobs small. Project completion retires owned processes and retains the accepted code; `project archive` creates a verified ZIP while keeping PR metadata searchable. See [completion and archival](docs/projects.md#completion-and-archival).
+The OS-specific user data directory owns durable project and job records. Each job worktree exposes its records through `.scratch/ctlrm`, a symlink into the central job directory. See [project/job commands, storage, and PR lookup](docs/projects.md) and the [backend implementation plan](docs/superpowers/plans/2026-09-05-project-jobs.md). Workflows can request bounded specialist-review tasks from a predefined allowlist. The [ship workflow](src/ctlrm/web/templates/ship.yaml) uses review lenses, fresh reviewer sessions, PR publication, and CI/review handling; the [single-agent workflow](src/ctlrm/web/templates/single-agent.yaml) keeps simple jobs small. Project completion retires owned processes and retains the accepted code; `project archive` creates a verified ZIP while keeping PR metadata searchable. See [completion and archival](docs/projects.md#completion-and-archival).
 
 ## Development
 
-Use Linux, Python 3.11 or newer, tmux 3.2a or newer, and local POSIX storage. `libtmux` 0.62.x is installed with the package. Install and authenticate the provider CLIs separately. Run `uv sync`, then `uv run ctlrm --help`. Run checks with `uv run pytest --cov ctlrm --cov-report term-missing`, `uv run ruff check .`, `uv run ruff format --check .`, and `uvx prek run --all-files`.
+Use Linux, Python 3.11 or newer, tmux 3.2a or newer, and local POSIX storage. `libtmux` 0.62.x is installed with the package. Install and authenticate the provider CLIs separately. Run `uv sync`, then `uv run ctlrm --help`. Run checks with `uv run pytest --cov ctlrm --cov-report term-missing`, `uv run ruff check .`, `uv run ruff format --check .`, and `uvx prek run --all-files`. Browser assets are packaged locally. After editing frontend source, run `npm --prefix frontend ci`, `npm --prefix frontend run build`, and `npm --prefix frontend run check`; `npm --prefix frontend run format` formats authored assets. Node is needed for frontend development, not to run the installed workbench.
 
 ## Managed sessions and workflows
 
 ```sh
 ctlrm --root /path/to/worktree session start --provider codex
 ctlrm --root /path/to/worktree session status
-ctlrm workflow validate --template examples/implement-review.yaml
-ctlrm --root /path/to/another-worktree workflow submit --template examples/implement-review.yaml --title "Implement the task" --file task.md --request-id my-task
+ctlrm workflow validate --template src/ctlrm/web/templates/implement-review.yaml
+ctlrm --root /path/to/another-worktree workflow submit --template src/ctlrm/web/templates/implement-review.yaml --title "Implement the task" --file task.md --request-id my-task
 ctlrm --root /path/to/another-worktree workflow status
 ```
 
-Use a fresh worktree for each independent job. The [example template](examples/implement-review.yaml) binds implementer and reviewer roles to separate Codex sessions, then waits for a human owner. Profiles explicitly select provider permissions; Claude automatic input requires an unattended profile. See [session operations and recovery limits](docs/managed-sessions.md) and [workflow acknowledgment, approval, retry, and cancellation](docs/workflows.md).
+Use a fresh worktree for each independent job. The [example template](src/ctlrm/web/templates/implement-review.yaml) binds implementer and reviewer roles to separate Codex sessions, then waits for a human owner. Profiles explicitly select provider permissions; Claude automatic input requires an unattended profile. See [session operations and recovery limits](docs/managed-sessions.md) and [workflow acknowledgment, approval, retry, and cancellation](docs/workflows.md).
 
 For project jobs, use `project complete` and `project archive`. To retire a standalone area, explicitly stop every managed session and verify its owned provider processes have exited, then stop the supervisor. Preserve wanted logs and artifacts outside the area before explicitly removing runtime files or the worktree with normal filesystem/Git tools. Supervisor stop alone leaves agents running. Project jobs can create dedicated worktrees automatically. Automatic worktree removal, recycling, parallel workflows in one area, cron, remote delegation, and embedded editing are deferred.
 

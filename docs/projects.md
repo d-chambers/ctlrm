@@ -6,8 +6,8 @@ Create a project and plan jobs without launching agents:
 
 ```sh
 ctlrm --root /path/to/codebase project create --project-id auth --name 'Improve authentication' --goal 'Rotate tokens safely' --design design.md
-ctlrm job create --project auth --job-id core --title 'Token rotation' --file goal.md --template examples/implement-review.yaml --acceptance 'Existing tokens remain valid during rollout'
-ctlrm job create --project auth --job-id clients --title 'Migrate callers' --file clients.md --template examples/implement-review.yaml --depends-on core
+ctlrm job create --project auth --job-id core --title 'Token rotation' --file goal.md --template src/ctlrm/web/templates/implement-review.yaml --acceptance 'Existing tokens remain valid during rollout'
+ctlrm job create --project auth --job-id clients --title 'Migrate callers' --file clients.md --template src/ctlrm/web/templates/implement-review.yaml --depends-on core
 ctlrm project status --project auth
 ctlrm job start --project auth --job core
 ```

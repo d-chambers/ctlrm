@@ -270,7 +270,9 @@ class SessionEngine:
             self.area.validate()
             self.state["paused"] = None
             return
-        session = self._session(payload, generation=kind not in {"stop", "resume", "replace"})
+        session = self._session(
+            payload, generation="generation" in payload or kind not in {"stop", "resume", "replace"}
+        )
         if kind in {"interact", "interaction-start", "interaction-finish"}:
             self._interaction(session, kind, payload)
             return

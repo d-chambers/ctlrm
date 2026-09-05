@@ -97,6 +97,25 @@ def root(
 
 
 @app.command()
+def serve(
+    port: Annotated[int, typer.Option(min=1024, max=65535)] = 8766,
+    data: Annotated[
+        Path | None, typer.Option(help="Override the central user data directory.")
+    ] = None,
+) -> None:
+    """Open a local browser workbench for managed projects and agent terminals."""
+    import uvicorn
+    from ctlrm.managed.projects import ProjectStore
+    from ctlrm.web.app import create_app
+
+    web = create_app(ProjectStore(data), port=port)
+    typer.echo(f"Control room: http://127.0.0.1:{port}/#token={web.state.token}")
+    uvicorn.run(
+        web, host="127.0.0.1", port=port, access_log=False, ws_max_size=65536, ws_max_queue=8
+    )
+
+
+@app.command()
 def init(
     ctx: typer.Context,
     participant_id: Annotated[str, typer.Option("--id", help="Room author's participant ID.")],

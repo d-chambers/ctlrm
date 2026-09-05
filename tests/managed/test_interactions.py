@@ -124,3 +124,49 @@ class TestNativeInteractions:
         engine.tick()
         assert engine.state["requests"][request]["status"] == "rejected"
         assert engine.state["sessions"][session_id]["interactions"][0]["status"] == "queued"
+
+    def test_replace_cancels_queued(self, native, monkeypatch) -> None:
+        """A queued message for the old native conversation cannot leak into its replacement."""
+        engine, client, session_id, loop = native
+        session = engine.state["sessions"][session_id]
+        monkeypatch.setenv("CODEX_HOME", session["profile"]["context"])
+        client.request(
+            "interact", {"session_id": session_id, "generation": 1, "text": "Old context"}
+        )
+        engine.tick()
+        client.request("stop", {"session_id": session_id})
+        engine.tick()
+        request = client.request("replace", {"session_id": session_id, "generation": 1})
+        engine.tick()
+        assert engine.state["requests"][request]["status"] == "accepted"
+        current = engine.state["sessions"][session_id]
+        assert current["generation"] == 2
+        assert current["interactions"][0]["status"] == "canceled"
+        with pytest.raises(ValueError, match="generation"):
+            loop.poll()
+
+    def test_queue_limit(self, native) -> None:
+        """A busy conversation has a bounded pending queue and rejects excess input visibly."""
+        engine, client, session_id, loop = native
+        for index in range(9):
+            request = client.request(
+                "interact", {"session_id": session_id, "generation": 1, "text": f"Message {index}"}
+            )
+        engine.tick()
+        assert engine.state["requests"][request]["status"] == "rejected"
+        assert len(engine.state["sessions"][session_id]["interactions"]) == 8
+
+    def test_pending_task_precedes_message(self, native) -> None:
+        """A queued conversation cannot claim a turn ahead of an undelivered assignment."""
+        engine, client, session_id, loop = native
+        payload = {"session_id": session_id, "generation": 1}
+        client.request("prompt", {**payload, "text": "Assigned work"})
+        client.request("interact", {**payload, "text": "Additional context"})
+        engine.tick()
+        item = engine.state["sessions"][session_id]["interactions"][0]
+        request = client.request(
+            "interaction-start", {**payload, "interaction_id": item["id"], "token": loop.token}
+        )
+        engine.tick()
+        assert engine.state["requests"][request]["status"] == "rejected"
+        assert engine.state["sessions"][session_id]["interactions"][0]["status"] == "queued"

@@ -48,3 +48,7 @@ ctlrm --root /path/to/worktree inbox --participant reviewer
 ```
 
 Restart commands in room signatures are stored only; use managed sessions for executable recovery. Room identity is cooperative rather than authenticated. All participants need appropriate shared filesystem permissions.
+
+### Conversation input
+
+Managed native Codex sessions accept conversation messages between turns with `ctlrm --root WORKTREE session interact --session-id ID --generation N --text "Explain the current change"`. This resumes the recorded native conversation and does not assign, acknowledge, or complete a workflow task. The supervisor accepts up to eight pending messages, each at most 16 KiB. A runner claims each message before invoking the provider; interrupted turns are retained as `uncertain` and are never automatically replayed. Explicitly replacing a conversation cancels its queued messages. Recent messages remain in the session snapshot and older messages remain in the event journal. Interactive providers continue to accept direct input through their owned tmux terminal.

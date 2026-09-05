@@ -171,6 +171,7 @@ class SessionEngine:
             raise ValueError(
                 "native recovery information is unavailable; explicit replacement required"
             )
+        self._interrupt_interactions(session, replace=not resume)
         if not resume:
             session.pop("recovery", None)
             session["native_id"] = profile.native_id()
@@ -257,6 +258,7 @@ class SessionEngine:
                 "generation": 0,
                 "recoveries": 0,
                 "work": None,
+                "interactions": [],
             }
             self._new_generation(session, resume=False)
             self.state["sessions"][session["id"]] = session
@@ -269,6 +271,9 @@ class SessionEngine:
             self.state["paused"] = None
             return
         session = self._session(payload, generation=kind not in {"stop", "resume", "replace"})
+        if kind in {"interact", "interaction-start", "interaction-finish"}:
+            self._interaction(session, kind, payload)
+            return
         if kind == "ready":
             if session["status"] not in {"spawning", "starting", "ready", "reconciling"}:
                 raise ValueError("session is not awaiting readiness")
@@ -380,6 +385,7 @@ class SessionEngine:
             session.pop("reconciliation", None)
             return
         if kind == "stop":
+            self._interrupt_interactions(session)
             session.update(stopped=True, ready=False, status="stopping")
             return
         if kind in {"resume", "replace"}:
@@ -393,6 +399,73 @@ class SessionEngine:
             self._plan_restart(session, resume=kind == "resume", reset_counter=True)
             return
         raise ValueError(f"unknown request kind: {kind}")
+
+    def _interrupt_interactions(self, session: dict, *, replace: bool = False) -> None:
+        """Retain interrupted messages as evidence; never replay their possible effects."""
+        for item in session.get("interactions", []):
+            if item["status"] == "running":
+                item.update(
+                    status="uncertain", error="Runner interrupted; inspect before resending"
+                )
+            elif replace and item["status"] == "queued":
+                item.update(status="canceled", error="The native conversation was replaced")
+
+    def _interaction(self, session: dict, kind: str, payload: dict) -> None:
+        """Serialize conversation input without assigning or acknowledging workflow tasks."""
+        if session["profile"]["input_mode"] != "native":
+            raise ValueError("use the interactive terminal for this provider")
+        items = session.setdefault("interactions", [])
+        if kind == "interact":
+            if not session["ready"] or session["status"] != "ready" or session["recovering"]:
+                raise ValueError("session must be ready and reconciled before receiving messages")
+            text = payload.get("text")
+            if not isinstance(text, str) or not text.strip() or len(text.encode()) > 16384:
+                raise ValueError("message must contain text and be at most 16384 bytes")
+            if sum(item["status"] in {"queued", "running"} for item in items) >= 8:
+                raise ValueError("message queue is full; wait for the agent to finish")
+            # Recent messages remain in the snapshot; the event journal retains older messages.
+            while len(items) >= 32:
+                removable = next(
+                    i for i, item in enumerate(items) if item["status"] not in {"queued", "running"}
+                )
+                items.pop(removable)
+            items.append(
+                {
+                    "id": identifier("interaction"),
+                    "text": text,
+                    "status": "queued",
+                    "created": self.clock(),
+                    "native_id": session["native_id"],
+                }
+            )
+            return
+        if payload.get("token") != session["spec"]["token"]:
+            raise ValueError("native runner ownership changed")
+        item = next((item for item in items if item["id"] == payload.get("interaction_id")), None)
+        if item is None or item["native_id"] != session["native_id"]:
+            raise ValueError("unknown message or changed native conversation")
+        if kind == "interaction-start":
+            queued = next((item for item in items if item["status"] == "queued"), None)
+            if (
+                not session["ready"]
+                or session["status"] != "ready"
+                or session["recovering"]
+                or pending_message(session)
+                or item is not queued
+                or any(other["status"] == "running" for other in items)
+            ):
+                raise ValueError("message cannot start until the active assignment is delivered")
+            item.update(status="running", generation=session["generation"])
+            return
+        if item["status"] != "running":
+            raise ValueError("message is no longer running")
+        status = payload.get("status")
+        if status not in {"completed", "uncertain"}:
+            raise ValueError("invalid message completion status")
+        error = payload.get("error")
+        if error is not None and (not isinstance(error, str) or len(error) > 2048):
+            raise ValueError("invalid message error")
+        item.update(status=status, error=error)
 
     def tick(self) -> list[str]:
         """Accept requests then reconcile committed effects; one writer holds the lock."""
@@ -557,6 +630,7 @@ class SessionEngine:
             raise ValueError("provider exited before acknowledging native recovery")
         if session["recoveries"] >= profile.recovery_limit:
             raise ValueError("native recovery limit reached; explicitly resume, replace, or stop")
+        self._interrupt_interactions(session)
         session["recoveries"] += 1
         session.update(
             status="backoff",

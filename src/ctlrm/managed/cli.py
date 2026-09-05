@@ -147,6 +147,25 @@ def prompt(
     _run(action)
 
 
+@session_app.command("interact")
+def interact(
+    ctx: typer.Context,
+    session_id: Annotated[str, typer.Option()],
+    generation: Annotated[int, typer.Option()],
+    text: Annotated[str, typer.Option()],
+    request_id: str | None = None,
+) -> None:
+    """Send conversation input to an existing native session between its turns."""
+    _run(
+        lambda: _send(
+            ctx,
+            "interact",
+            {"session_id": session_id, "generation": generation, "text": text},
+            request_id,
+        )
+    )
+
+
 @session_app.command("acknowledge")
 def acknowledge(
     ctx: typer.Context,

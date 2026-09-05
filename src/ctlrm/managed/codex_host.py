@@ -8,7 +8,8 @@ import sys
 import time
 from uuid import UUID
 
-from ctlrm.managed.sessions import pending_message
+from ctlrm.managed.area import Area
+from ctlrm.managed.sessions import SessionService, pending_message
 from ctlrm.managed.storage import Journal, read_record
 
 
@@ -57,6 +58,7 @@ class InputLoop:
         clock=time.monotonic,
     ) -> None:
         """Bind the input reader to one owned generation and its native conversation."""
+        self.service = SessionService(Area.load(root))
         self.journal = Journal(root)
         self.session_id = session_id
         self.generation = generation
@@ -80,7 +82,7 @@ class InputLoop:
             reference = self.config["bootstrap"]
         else:
             if not outbound:
-                return False
+                return self.interact(session)
             message_id = outbound["id"]
             path = (
                 self.journal.root
@@ -101,6 +103,41 @@ class InputLoop:
             self.config["executable"], self.config["arguments"], self.native_id, reference
         )
         self.attempted[message_id] = self.clock()
+        return True
+
+    def interact(self, session: dict) -> bool:
+        """Claim one message before resuming the same thread, without automatic replay."""
+        if not session["ready"] or session["status"] != "ready" or session["recovering"]:
+            return False
+        item = next(
+            (item for item in session.get("interactions", []) if item["status"] == "queued"), None
+        )
+        if item is None:
+            return False
+        payload = {
+            "session_id": self.session_id,
+            "generation": self.generation,
+            "token": self.token,
+            "interaction_id": item["id"],
+        }
+        request = self.service.request("interaction-start", payload)
+        try:
+            self.service.await_result(request)
+        except ValueError:
+            # A newly routed assignment can win the race for this idle turn.
+            return False
+        status, error = "completed", None
+        try:
+            self.native_id = turn(
+                self.config["executable"], self.config["arguments"], self.native_id, item["text"]
+            )
+        except (ValueError, RuntimeError, OSError) as failure:
+            status, error = "uncertain", str(failure)[:2048]
+            print(f"Conversation message interrupted: {error}", flush=True)
+        request = self.service.request(
+            "interaction-finish", {**payload, "status": status, "error": error}
+        )
+        self.service.await_result(request)
         return True
 
 

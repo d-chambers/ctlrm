@@ -27,3 +27,21 @@ ctlrm job find --pr 42 --repository owner/repo
 ```
 
 Repository identities accept `owner/repo` or `host/owner/repo`. Bare-number searches return every match, avoiding ambiguity across repositories. Reassigning a PR preserves the previous assignment in project event history. Assignment records identity; it does not query a hosting service or assert that the PR is merged. Project and job status commands never launch processes.
+
+## Completion and archival
+
+```sh
+ctlrm project complete --project auth
+ctlrm project archive --project auth --output /path/to/auth.zip
+ctlrm project verify-archive --file /path/to/auth.zip
+```
+
+Complete a project after every job workflow has completed. Completion retires each job: it stops owned agent processes, shuts down its supervisor, and prevents new managed work. It then retains the final accepted code version. If the worktree changed after the final outcome, completion refuses it; restore that version before retrying. A partially completed operation can be retried. A completed project cannot add/start jobs or change PR assignments.
+
+Archival completes the project if needed, writes and verifies a ZIP, then records its checksum in project history. The default path is `archives/PROJECT.zip` under the central data directory. An existing unrelated ZIP is never overwritten. Retrying after publication recovers the matching verified ZIP. Archived project/job metadata remains centrally searchable, including PR numbers. Worktrees and source records remain in place; removing them is a separate explicit action after checking the archive.
+
+The ZIP contains project goals/design, immutable job/workflow snapshots, managed session recovery records, mailbox messages, review records, artifact manifests, runtime logs, and retained code. Each job's `retained/code.bundle` contains the Git history reachable from its final HEAD; `retained/index.patch` preserves staged changes. `retained/manifest.json` records the final file inventory, deletion state, modes, link text hashes, and content-addressed `retained/blobs/` data for tracked and non-ignored untracked files. To recover a checkout, fetch `HEAD` from the bundle into a new repository, apply the index patch, and restore the manifest's working-file content and modes from its blobs. Verify the archive before using its files; verification does not extract or execute anything.
+
+Provider credentials and external native conversation stores are excluded. Gitlinks identify nested repositories but do not bundle their separate object databases. Symlinks are stored as link text without following their targets. The archive has a 512 MiB uncompressed content limit and a 100,000-file limit; individual code artifacts retain their existing 64 MiB/10,000-file limits. A limit or checksum failure leaves source records and worktrees intact.
+
+The [native acceptance record](evidence/project-archive-2026-09-05.json) exercises a single-agent job, a dependent two-task job with a fresh native reviewer conversation, owned-process retirement, and verified retention of both uncommitted outputs in the project ZIP.

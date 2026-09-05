@@ -222,6 +222,7 @@ class ProjectStore:
         return {
             "project": project.model_dump(),
             "status": state.get("project_status", "active"),
+            "archive": state.get("archive"),
             "jobs": jobs,
         }
 
@@ -395,3 +396,75 @@ class ProjectStore:
             and job["pr"]["number"] == number
             and (repository is None or job["pr"]["repository"] == repository.strip().casefold())
         ]
+
+    def complete(self, project_id: str) -> dict:
+        """Retire completed jobs and retain their code before closing a project."""
+        from ctlrm.managed import supervisor
+        from ctlrm.managed.area import Area
+        from ctlrm.managed.archive import retain
+
+        self.project(project_id)
+        with self.locked(project_id) as journal:
+            state = journal.replay()[0]
+            if state.get("project_status") in {"completed", "archived"}:
+                return self.status(project_id)
+            jobs = self.status(project_id)["jobs"]
+            if any(job["status"] != "completed" for job in jobs):
+                raise ValueError("complete every job before completing the project")
+            for job in jobs:
+                path = self.job_path(project_id, job["job"]["id"])
+                runtime = Journal(path, storage_root=path / "runtime")
+                if not runtime.replay()[0].get("retired"):
+                    area = Area.load(Path(job["launch"]["root"]))
+                    client = WorkflowService(area)
+                    supervisor.start(area)
+                    if not runtime.replay()[0].get("retired"):
+                        request = client.request("workflow-retire", {})
+                        client.await_result(request)
+                    deadline = time.monotonic() + 30
+                    while not runtime.replay()[0].get("retired") or supervisor.running(area):
+                        if time.monotonic() >= deadline:
+                            raise RuntimeError(
+                                "job retirement is still pending; retry project complete after checking status"
+                            )
+                        time.sleep(0.1)
+                last = job["run"]["executions"][-1]
+                artifact = read_record(path / "runtime/artifacts" / f"{last['artifact']}.json")
+                retain(
+                    Path(job["launch"]["root"]),
+                    path / "retained",
+                    expected_version=artifact["version"],
+                )
+            state["project_status"] = "completed"
+            journal.commit(state, "project-completed")
+        return self.status(project_id)
+
+    def archive(self, project_id: str, output: Path | None = None) -> dict:
+        """Complete and archive a project, retaining searchable metadata and source files."""
+        from ctlrm.managed.archive import archive, archive_result, verify_archive, verify_retained
+
+        self.complete(project_id)
+        with self.locked(project_id) as journal:
+            state = journal.replay()[0]
+            existing = state.get("archive")
+            if existing:
+                if output is not None and str(output.resolve()) != existing["path"]:
+                    raise ValueError("project is already archived at another path")
+                manifest = verify_archive(Path(existing["path"]))
+                if (
+                    manifest["project_id"] != project_id
+                    or archive_result(Path(existing["path"]), existing["files"])["sha256"]
+                    != existing["sha256"]
+                ):
+                    raise ValueError("archive identity differs from the committed project record")
+                return existing
+            for job in self.status(project_id)["jobs"]:
+                retained = self.job_path(project_id, job["job"]["id"]) / "retained"
+                verify_retained(retained, read_record(retained / "manifest.json"))
+            result = archive(
+                self.project_path(project_id),
+                output or self.root / "archives" / f"{project_id}.zip",
+            )
+            state.update(project_status="archived", archive=result)
+            journal.commit(state, "project-archived", result)
+            return result

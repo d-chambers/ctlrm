@@ -1,0 +1,79 @@
+{
+  "project": "canonical-smoke",
+  "status": "archived",
+  "archive": {
+    "path": "/tmp/ctlrm-canonical-native-data/archives/canonical-smoke.zip",
+    "sha256": "a9d8f9330a0e9e695e0e6793ef5ea3f590ef8ccb7a2f7291a424c0bb26c15674",
+    "files": 105
+  },
+  "verified_files": 105,
+  "jobs": [
+    {
+      "job": "fresh",
+      "status": "completed",
+      "worktree_preserved": true,
+      "retired": true,
+      "supervisor_running": false,
+      "executions": [
+        {
+          "task": "write",
+          "generation": 1,
+          "status": "completed",
+          "outcome": "completed"
+        },
+        {
+          "task": "review",
+          "generation": 2,
+          "status": "completed",
+          "outcome": "approved"
+        }
+      ],
+      "recovery_records": [
+        {
+          "generation": 1,
+          "native_id": "01a071c0-0af2-77a2-9a3c-4584a6a2b037"
+        },
+        {
+          "generation": 2,
+          "native_id": "01a071c1-ec79-7772-876f-60367189b886"
+        }
+      ]
+    },
+    {
+      "job": "write",
+      "status": "completed",
+      "worktree_preserved": true,
+      "retired": true,
+      "supervisor_running": false,
+      "executions": [
+        {
+          "task": "work",
+          "generation": 1,
+          "status": "completed",
+          "outcome": "completed"
+        }
+      ],
+      "recovery_records": [
+        {
+          "generation": 1,
+          "native_id": "01a071af-76b1-7273-b137-6611c865727f"
+        }
+      ]
+    }
+  ],
+  "date": "2026-09-05",
+  "provider": "codex",
+  "terminal_manager": "libtmux",
+  "expected_outputs": {
+    "write": {
+      "path": "result.txt",
+      "content": "CENTRAL-JOB-READY\n",
+      "verified_retained_blob": "ba7eb66464c957b0909f601a0b84879d7cc8741bc755316017428ef1b5359764"
+    },
+    "fresh": {
+      "path": "fresh.txt",
+      "content": "FRESH-REVIEW-READY\n",
+      "verified_retained_blob": "782b5a6b0fd21ee9953338a9fa93dc1a7f5a1ac49569883a05f5c08095218069"
+    }
+  }
+}

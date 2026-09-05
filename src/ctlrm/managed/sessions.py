@@ -71,6 +71,8 @@ class SessionService:
         """Submit an operation without creating a second state authority."""
         if kind not in {"stop", "supervisor-stop", "workflow-cancel"}:
             self.area.validate()
+        if self.area.journal.replay()[0].get("retired"):
+            raise ValueError("job is retired; its runtime is read-only")
         return self.area.journal.submit(kind, payload, request_id)
 
     def status(self) -> dict:
@@ -100,6 +102,8 @@ class SessionService:
     def ready(self, session_id: str, generation: int, native_id: str) -> str:
         """Claim the assigned role and publish this generation's native recovery instructions."""
         state, _, _ = self.area.journal.replay()
+        if state.get("retired") or state.get("retiring"):
+            raise ValueError("job is retiring or retired")
         session = state["sessions"].get(session_id)
         if session is None:
             raise ValueError("unknown session")

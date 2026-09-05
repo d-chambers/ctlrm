@@ -106,6 +106,9 @@ class WorkflowService(SessionService):
 
     def join(self, participant: str) -> None:
         """Explicitly accept an assigned human role without changing the roster."""
+        state = self.area.journal.replay()[0]
+        if state.get("retiring") or state.get("retired"):
+            raise ValueError("job is retiring or retired")
         role = self.area.data["roles"].get(participant)
         if not role or role["kind"] != "human":
             raise ValueError("human join requires an assigned human role")
@@ -376,6 +379,17 @@ class WorkflowEngine(SessionEngine):
 
     def apply(self, kind: str, payload: dict) -> None:
         """Validate workflow operations alongside existing session operations."""
+        if self.state.get("retiring") or self.state.get("retired"):
+            if kind not in {"workflow-retire", "stop", "supervisor-stop"}:
+                raise ValueError("job is retiring or archived; no further work can start")
+        if kind == "workflow-retire":
+            if (self.state.get("run") or {}).get("status") != "completed":
+                raise ValueError("only completed jobs may retire for archival")
+            self.state["retiring"] = True
+            for session in self.state["sessions"].values():
+                if session["status"] not in {"stopped", "stopping"}:
+                    super().apply("stop", {"session_id": session["id"]})
+            return
         if kind == "workflow-cancel":
             self._cancel()
             return
@@ -465,6 +479,11 @@ class WorkflowEngine(SessionEngine):
 
     def advance(self) -> None:
         """Bind ready sessions or humans and publish only already committed assignments."""
+        if self.state.get("retiring"):
+            if all(session["status"] == "stopped" for session in self.state["sessions"].values()):
+                self.state.update(retiring=False, retired=True, shutdown=True)
+                self.commit("job-retired")
+            return
         run = self.state.get("run")
         if run and run["status"] == "canceling":
             if all(s["status"] == "stopped" for s in self.state["sessions"].values()):

@@ -79,10 +79,10 @@ class TestAutomaticInputPolicy:
         """A later short option must not undo a policy validated through a long option."""
         with pytest.raises(ValueError, match="exactly one"):
             ProviderProfile(
-                provider="codex",
+                provider="claude",
                 executable=sys.executable,
                 context=str(tmp_path),
-                arguments=["--ask-for-approval", "never", "-a", "on-request"],
+                arguments=["--permission-mode", "dontAsk", "--permission-mode", "default"],
                 input_mode="unattended",
             )
 
@@ -92,7 +92,7 @@ class TestPermissionEqualsForm:
 
     @pytest.mark.parametrize(
         "provider,argument",
-        [("claude", "--permission-mode=dontAsk"), ("codex", "--ask-for-approval=never")],
+        [("claude", "--permission-mode=dontAsk")],
     )
     def test_equals_form(self, tmp_path: Path, provider: str, argument: str) -> None:
         """The policy guard accepts native argument syntax without weakening its checks."""
@@ -104,3 +104,15 @@ class TestPermissionEqualsForm:
             input_mode="unattended",
         )
         assert profile.input_mode == "unattended"
+
+
+class TestCodexOwnership:
+    """Managed sessions cannot mistake a shared daemon's TUI for its provider process."""
+
+    @pytest.mark.parametrize("mode", ["manual", "unattended"])
+    def test_shared_daemon_transport_rejected(self, tmp_path, mode) -> None:
+        """Codex ownership requires the terminal-owned native turn transport."""
+        with pytest.raises(ValueError, match="requires input_mode native"):
+            ProviderProfile(
+                provider="codex", executable=sys.executable, context=str(tmp_path), input_mode=mode
+            )

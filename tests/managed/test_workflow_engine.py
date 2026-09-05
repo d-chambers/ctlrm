@@ -67,6 +67,7 @@ def prepare(engine, client):
         "participant": participant,
         "session_id": execution["session_id"],
         "generation": execution["generation"],
+        "input_artifact": execution["input"].get("artifact"),
     }
 
 
@@ -480,3 +481,166 @@ class TestCounterpartBoundaries:
         monkeypatch.setenv("CTLRM_SESSION", "managed-agent")
         with pytest.raises(ValueError, match="cannot accept a human"):
             client.join("owner")
+
+
+class TestAutomaticWorkflow:
+    """Tasks drive role launches and authoritative handoffs without manual routing."""
+
+    def test_lazy_launch_and_stale_approval(self, repository, template) -> None:
+        """Only the active role launches, and approval is tied to the delivered bytes."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            assert terminal.launches == 1
+            assert {s["participant"] for s in engine.state["sessions"].values()} == {"implementer"}
+            (repository / "new-code.txt").write_text("delivered")
+            complete(engine, client, "completed")
+            assert terminal.launches == 2
+            payload = prepare(engine, client)
+            wrong = client.request("workflow-ack", {**payload, "input_artifact": "wrong"})
+            engine.tick()
+            assert engine.state["requests"][wrong]["status"] == "rejected"
+            client.request("workflow-ack", payload)
+            engine.tick()
+            (repository / "new-code.txt").write_text("changed")
+            report = client.request(
+                "workflow-report", {**payload, "outcome": "approved", "summary": "Looks good"}
+            )
+            engine.tick()
+            assert engine.state["requests"][report]["status"] == "rejected"
+            assert "artifact changed" in engine.state["requests"][report]["error"]
+            assert engine.active()["step"] == "review"
+
+    def test_cancel_wins_over_report(self, repository, template) -> None:
+        """Accepted cancellation prevents a late completion and disables recovery."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            payload = prepare(engine, client)
+            client.request("workflow-ack", payload)
+            engine.tick()
+            client.request("workflow-cancel", {})
+            late = client.request(
+                "workflow-report", {**payload, "outcome": "completed", "summary": "Done"}
+            )
+            engine.tick()
+            engine.tick()
+            assert engine.state["run"]["status"] == "canceled"
+            assert engine.state["requests"][late]["status"] == "rejected"
+            assert not terminal.terminals and terminal.launches == 1
+            WorkflowEngine(client.area, terminal).tick()
+            assert terminal.launches == 1
+
+    def test_retry_is_new_visit(self, repository, template) -> None:
+        """Retry requires explicit stop and preserves the abandoned execution as evidence."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            payload = prepare(engine, client)
+            retry = {"execution_id": payload["execution_id"], "reason": "Explicitly repeat work"}
+            unsafe = client.request("workflow-retry", retry)
+            engine.tick()
+            assert engine.state["requests"][unsafe]["status"] == "rejected"
+            client.request("stop", {"session_id": payload["session_id"]})
+            engine.tick()
+            request = client.request("workflow-retry", retry)
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "accepted"
+            assert engine.active()["id"] != payload["execution_id"]
+            assert engine.state["run"]["executions"][0]["status"] == "abandoned"
+            assert terminal.launches == 1
+            client.request("resume", {"session_id": payload["session_id"]})
+            engine.tick()
+            complete(engine, client, "completed")
+            assert engine.active()["step"] == "review"
+
+    def test_cancel_after_branch_drift(self, repository, template) -> None:
+        """Cancellation remains available even when further dispatch has been paused."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            subprocess.run(
+                ["git", "-C", str(repository), "switch", "-c", "drift"],
+                check=True,
+                capture_output=True,
+            )
+            engine.tick()
+            client.request("workflow-cancel", {})
+            engine.tick()
+            engine.tick()
+            assert engine.state["run"]["status"] == "canceled"
+            assert not terminal.terminals
+
+
+class TestHandoffCrashes:
+    """Committed outcomes and assignments remain unique across supervisor failure boundaries."""
+
+    def test_crash_after_outcome_commit(self, repository, template, monkeypatch) -> None:
+        """Replay drives the already accepted next visit without accepting the outcome twice."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            payload = prepare(engine, client)
+            client.request("workflow-ack", payload)
+            engine.tick()
+            request = client.request(
+                "workflow-report", {**payload, "outcome": "completed", "summary": "Done"}, "handoff"
+            )
+            original = engine.commit
+
+            def crash(kind, detail=None):
+                """Kill the supervisor after accepting the outcome and before next-role effects."""
+                original(kind, detail)
+                if kind == "request" and detail["id"] == request:
+                    raise KeyboardInterrupt("after outcome commit")
+
+            monkeypatch.setattr(engine, "commit", crash)
+            with pytest.raises(KeyboardInterrupt):
+                engine.tick()
+            recorded = client.area.journal.replay()[0]["run"]["active"]
+            restarted = WorkflowEngine(client.area, terminal)
+            restarted.tick()
+            assert restarted.active()["id"] == recorded
+            assert len(restarted.state["run"]["executions"]) == 2
+            assert terminal.launches == 2
+            client.request(
+                "workflow-report", {**payload, "outcome": "completed", "summary": "Done"}, "handoff"
+            )
+            restarted.tick()
+            assert len(restarted.state["run"]["executions"]) == 2
+
+    def test_crash_after_wake(self, repository, template, monkeypatch) -> None:
+        """A repeated hint after restart still refers to the same logical assignment."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            current = next(iter(engine.state["sessions"].values()))
+            client.ready(current["id"], 1, current["native_id"])
+            original = terminal.wake
+
+            def crash(*args):
+                """Interrupt after terminal delivery but before the volatile wake cache update."""
+                original(*args)
+                raise KeyboardInterrupt("after wake")
+
+            with monkeypatch.context() as patch:
+                patch.setattr(terminal, "wake", crash)
+                with pytest.raises(KeyboardInterrupt):
+                    engine.tick()
+            restarted = WorkflowEngine(client.area, terminal)
+            restarted.tick()
+            assert len(terminal.wakes) == 2 and terminal.wakes[0] == terminal.wakes[1]
+            assert len(restarted.state["run"]["executions"]) == 1
+            assert restarted.active()["status"] == "pending"

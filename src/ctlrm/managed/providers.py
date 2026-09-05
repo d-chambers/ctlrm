@@ -1,6 +1,8 @@
 """Authoritative provider profiles and agent-acknowledged native recovery."""
 
+import json
 import os
+import sys
 from pathlib import Path
 import re
 import shutil
@@ -19,7 +21,7 @@ class ProviderProfile(BaseModel):
     arguments: list[str] = Field(default_factory=list)
     required_environment: list[str] = Field(default_factory=list)
     context: str
-    input_mode: Literal["manual", "unattended"] = "manual"
+    input_mode: Literal["manual", "unattended", "native"] = "manual"
     registration_timeout: float = Field(default=180, ge=1, le=3600)
     recovery_limit: int = Field(default=3, ge=0, le=20)
     backoff: float = Field(default=2, ge=0, le=300)
@@ -29,6 +31,12 @@ class ProviderProfile(BaseModel):
     @model_validator(mode="after")
     def validate_flags(self) -> "ProviderProfile":
         """Keep native identity and persistence flags under adapter control."""
+        if self.provider == "codex" and self.input_mode != "native":
+            raise ValueError(
+                "managed Codex requires input_mode native to own its provider processes"
+            )
+        if self.input_mode == "native" and self.provider != "codex":
+            raise ValueError("native input transport currently requires Codex")
         reserved = {
             "--resume",
             "--session-id",
@@ -44,10 +52,8 @@ class ProviderProfile(BaseModel):
             not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) for name in self.required_environment
         ):
             raise ValueError("invalid required environment name")
-        if self.input_mode == "unattended" and self.provider != "command":
-            names = (
-                {"--permission-mode"} if self.provider == "claude" else {"--ask-for-approval", "-a"}
-            )
+        if self.input_mode == "unattended" and self.provider == "claude":
+            names = {"--permission-mode"}
             if sum(value.split("=", 1)[0] in names for value in self.arguments) != 1:
                 raise ValueError("automatic input requires exactly one explicit permission policy")
             pairs = {}
@@ -63,11 +69,6 @@ class ProviderProfile(BaseModel):
                     )
             if self.provider == "claude" and pairs.get("--permission-mode") != "dontAsk":
                 raise ValueError("automatic Claude input requires --permission-mode dontAsk")
-            if (
-                self.provider == "codex"
-                and pairs.get("--ask-for-approval", pairs.get("-a")) != "never"
-            ):
-                raise ValueError("automatic Codex input requires --ask-for-approval never")
         if self.provider == "command" and not self.resume_arguments:
             raise ValueError("command profiles require an explicit native resume argument template")
         return self
@@ -116,10 +117,17 @@ class ProviderProfile(BaseModel):
             ]
         if self.provider == "codex":
             return [
-                self.executable,
-                *(["resume", native_id] if resume else []),
-                *self.arguments,
-                bootstrap,
+                sys.executable,
+                "-m",
+                "ctlrm.managed.codex_host",
+                json.dumps(
+                    {
+                        "executable": self.executable,
+                        "arguments": self.arguments,
+                        "native_id": native_id if resume else None,
+                        "bootstrap": bootstrap,
+                    }
+                ),
             ]
         values = {"native_id": native_id or "", "bootstrap": bootstrap}
         template = self.resume_arguments if resume else self.launch_arguments
@@ -135,4 +143,9 @@ def builtin(provider: str) -> ProviderProfile:
         if provider == "codex"
         else os.environ.get("CLAUDE_CONFIG_DIR", str(Path.home() / ".claude"))
     )
-    return ProviderProfile(provider=provider, executable=provider, context=context).checked()
+    return ProviderProfile(
+        provider=provider,
+        executable=provider,
+        context=context,
+        input_mode="native" if provider == "codex" else "manual",
+    ).checked()

@@ -58,7 +58,7 @@ class SessionService:
 
     def request(self, kind: str, payload: dict, request_id: str | None = None) -> str:
         """Submit an operation without creating a second state authority."""
-        if kind not in {"stop", "supervisor-stop"}:
+        if kind not in {"stop", "supervisor-stop", "workflow-cancel"}:
             self.area.validate()
         return self.area.journal.submit(kind, payload, request_id)
 
@@ -336,7 +336,7 @@ class SessionEngine:
                 if session["recovering"]:
                     raise ValueError("reconcile recovered work before acknowledging continuation")
                 if work["status"] == "completed":
-                    return
+                    raise ValueError("completed work cannot be acknowledged for new action")
                 work.update(status="acknowledged", generation=session["generation"])
                 return
             disposition = payload.get("status")
@@ -394,6 +394,7 @@ class SessionEngine:
                     "reconcile-area",
                     "supervisor-stop",
                     "stop",
+                    "workflow-cancel",
                 }:
                     raise ValueError(
                         "area is paused; explicitly reconcile after restoring its identity"
@@ -407,7 +408,7 @@ class SessionEngine:
             self.commit("request", {"id": request["id"], **result})
         if self.state["shutdown"]:
             return errors
-        if not self.state["paused"]:
+        if not self.state["paused"] or (self.state.get("run") or {}).get("status") == "canceling":
             try:
                 self.advance()
             except (ValueError, OSError, RuntimeError) as error:
@@ -444,6 +445,7 @@ class SessionEngine:
                 session["error"] = None
                 self.commit("terminal-retired", {"session_id": session["id"]})
         if status == "planned":
+            self.area.validate()
             if self.terminal.exists(spec):
                 raise ValueError("terminal name occupied before launch; refusing adoption")
             publish(
@@ -475,6 +477,7 @@ class SessionEngine:
         if status in {"blocked", "stopped"}:
             return
         if status == "backoff":
+            self.area.validate()
             if self.clock() < session["retry_at"]:
                 return
             self._plan_restart(session, resume=True)
@@ -503,6 +506,19 @@ class SessionEngine:
             if outbound and pending:
                 mailbox(self.area, session["participant"], outbound)
                 if profile.input_mode == "manual":
+                    return
+                if profile.input_mode == "native":
+                    publish(
+                        self.area.room.root
+                        / "sessions"
+                        / session["id"]
+                        / f"input-{session['generation']}"
+                        / f"{outbound['id']}.json",
+                        {
+                            "token": spec["token"],
+                            "reference": reference(session["participant"], outbound["id"]),
+                        },
+                    )
                     return
                 # Repeated wake hints preserve one logical message/work ID; acting requires acknowledgment.
                 key = (session["id"], session["generation"], outbound["id"])

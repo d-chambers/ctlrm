@@ -338,3 +338,22 @@ class TestPendingRetirement:
         assert old_name not in terminal.terminals
         assert len(terminal.terminals) == 1
         assert session(engine)["generation"] == 2
+
+
+class TestNativeHints:
+    """Native transports publish generation-bound work hints without terminal keystrokes."""
+
+    def test_hint_replay(self, managed) -> None:
+        """Reconstructing the supervisor preserves one native input record and work ID."""
+        area, engine, terminal, client = managed
+        current = session(engine)
+        current["profile"].update(provider="codex", input_mode="native")
+        engine.commit("test-native-transport")
+        client.request("prompt", {"session_id": current["id"], "generation": 1, "text": "Work"})
+        engine.tick()
+        original = session(engine)["work"]["id"]
+        restarted = SessionEngine(area, terminal)
+        restarted.tick()
+        paths = list((area.room.root / "sessions" / current["id"] / "input-1").glob("*.json"))
+        assert len(paths) == 1 and not terminal.wakes
+        assert session(restarted)["work"]["id"] == original

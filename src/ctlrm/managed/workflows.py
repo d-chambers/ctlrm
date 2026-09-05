@@ -7,6 +7,7 @@ import shlex
 import sys
 
 from ctlrm.managed.area import Area, worktree
+from ctlrm.managed.artifacts import capture, verify
 from ctlrm.managed.sessions import SessionEngine, SessionService, mailbox, message
 from ctlrm.managed.storage import identifier, now
 from ctlrm.runtime.participants import validate_participant_id
@@ -181,8 +182,55 @@ class WorkflowEngine(SessionEngine):
             raise ValueError("execution is waiting for assignment")
         return execution, session
 
+    def _cancel(self) -> None:
+        """Commit cancellation authority before stopping every owned provider generation."""
+        run = self.state.get("run")
+        if not run or run["status"] not in {"running", "blocked", "canceling"}:
+            raise ValueError("only unfinished workflows can be canceled")
+        run.update(status="canceling", reason="waiting for owned providers to stop")
+        for session in self.state["sessions"].values():
+            super().apply("stop", {"session_id": session["id"]})
+
+    def _retry(self, payload: dict) -> None:
+        """Explicitly abandon one visit, refreshing its input artifact when requested."""
+        execution = self.active()
+        if payload.get("execution_id") != execution["id"]:
+            raise ValueError("retry requires the active execution ID")
+        reason = payload.get("reason")
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 16384:
+            raise ValueError("retry requires a bounded explanation")
+        session = self.state["sessions"].get(execution["session_id"])
+        if session and session["status"] != "stopped":
+            raise ValueError("explicitly stop the assigned session before retrying work")
+        if len(self.state["run"]["executions"]) >= self.template.limits.max_step_executions:
+            raise ValueError("step execution limit reached; cancel or use a fresh worktree")
+        incoming = {**execution["input"], "retry_of": execution["id"], "retry_reason": reason}
+        if incoming.get("artifact"):
+            incoming["artifact"] = capture(self.area, self.state["run"]["id"], execution["id"])
+        execution["status"] = "abandoned"
+        if session:
+            session["work"] = None
+            session["recovering"] = False
+        self._visit(execution["step"], incoming)
+
     def apply(self, kind: str, payload: dict) -> None:
         """Validate workflow operations alongside existing session operations."""
+        if kind == "workflow-cancel":
+            self._cancel()
+            return
+        if kind == "workflow-retry":
+            self.area.validate()
+            self._retry(payload)
+            return
+        run = self.state.get("run")
+        if (
+            run
+            and run["status"] in {"canceling", "canceled"}
+            and kind not in {"stop", "supervisor-stop", "reconcile-area"}
+        ):
+            raise ValueError("workflow is canceled; no further work can start")
+        if kind == "launch":
+            raise ValueError("workflow roles are launched by the active step")
         if kind == "workflow-start":
             if self.state.get("run"):
                 raise ValueError("workflow is already started")
@@ -192,7 +240,10 @@ class WorkflowEngine(SessionEngine):
             self._visit(self.template.entry, {})
             return
         if kind in {"workflow-ack", "workflow-report"}:
+            self.area.validate()
             execution, session = self._owner(payload)
+            if payload.get("input_artifact") != execution["input"].get("artifact"):
+                raise ValueError("acknowledge and report the exact assigned input artifact")
             if kind == "workflow-ack":
                 execution["status"] = "acknowledged"
                 if session:
@@ -212,7 +263,13 @@ class WorkflowEngine(SessionEngine):
             if not isinstance(outcome, str) or not isinstance(summary, str) or len(summary) > 16384:
                 raise ValueError("outcome and a bounded summary are required")
             destination = transition(self.template, execution["step"], outcome)
-            execution.update(status="completed", outcome=outcome, summary=summary)
+            if outcome == "approved" and execution["input"].get("artifact"):
+                verify(self.area, execution["input"]["artifact"])
+            artifact = capture(self.area, self.state["run"]["id"], execution["id"])
+            self.area.validate()
+            execution.update(
+                status="completed", outcome=outcome, summary=summary, artifact=artifact
+            )
             if session:
                 session["work"]["status"] = "completed"
             self._visit(
@@ -232,8 +289,14 @@ class WorkflowEngine(SessionEngine):
     def advance(self) -> None:
         """Bind ready sessions or humans and publish only already committed assignments."""
         run = self.state.get("run")
+        if run and run["status"] == "canceling":
+            if all(s["status"] == "stopped" for s in self.state["sessions"].values()):
+                run.update(status="canceled", active=None, reason=None)
+                self.commit("workflow-canceled")
+            return
         if not run or run["status"] != "running":
             return
+        self.area.validate()
         execution = self.active()
         role = self.area.data["roles"][execution["participant"]]
         session = next(
@@ -244,7 +307,11 @@ class WorkflowEngine(SessionEngine):
             ),
             None,
         )
-        if role["kind"] == "agent" and (not session or not session["ready"]):
+        if role["kind"] == "agent" and not session:
+            super().apply("launch", {"participant": execution["participant"]})
+            self.commit("role-launch-planned", {"participant": execution["participant"]})
+            return
+        if role["kind"] == "agent" and (not session["ready"] or session["status"] != "ready"):
             return
         if not execution["message"]:
             command = shlex.join(
@@ -257,6 +324,8 @@ class WorkflowEngine(SessionEngine):
             if session:
                 arguments += f" --session-id {session['id']} --generation {session['generation']}"
                 execution.update(session_id=session["id"], generation=session["generation"])
+            if execution["input"].get("artifact"):
+                arguments += f" --input-artifact {execution['input']['artifact']}"
             body = (
                 f"Area: {self.area.data['id']}\nRun: {run['id']}\nWork ID: {execution['id']}\n"
                 f"Role instructions: {role['instructions']}\nTask: .ctlrm/task.md\n"
@@ -265,7 +334,8 @@ class WorkflowEngine(SessionEngine):
                 f"Before acting, run: {command} acknowledge {arguments}\n"
                 f"Report with: {command} report {arguments} --outcome OUTCOME --summary SUMMARY\n"
                 "After native resume use your CURRENT generation in these commands. "
-                "Do not choose the next recipient; the workflow routes accepted outcomes."
+                "Do not choose the next recipient; the workflow routes accepted outcomes. "
+                "After an accepted report, finish your turn and wait; do not perform further work."
             )
             execution.update(
                 status="pending", message=message(execution["participant"], "assignment", body)

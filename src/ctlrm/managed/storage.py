@@ -52,7 +52,19 @@ def read_record(path: Path) -> dict:
         data = stream.read(MAX_RECORD_BYTES + 1)
     if len(data) > MAX_RECORD_BYTES:
         raise ValueError(f"record exceeds {MAX_RECORD_BYTES} bytes: {path}")
-    value = json.loads(data, object_pairs_hook=unique)
+    try:
+        value = json.loads(data, object_pairs_hook=unique)
+    except RecursionError as error:
+        raise ValueError(f"record nesting is too deep: {path}") from error
+    pending = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        if depth > 64:
+            raise ValueError(f"record nesting is too deep: {path}")
+        if isinstance(item, dict):
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            pending.extend((child, depth + 1) for child in item)
     if not isinstance(value, dict):
         raise ValueError(f"record must be an object: {path}")
     return value
@@ -158,6 +170,11 @@ class Journal:
                     raise ValueError("request identity or payload mismatch")
                 if not isinstance(item.get("at"), str) or not isinstance(item.get("kind"), str):
                     raise ValueError("request timestamp/kind missing")
+                if not 1 <= len(item["kind"]) <= 64 or not item["kind"].isascii():
+                    raise ValueError("request kind must be bounded ASCII text")
+                if len(item["at"]) > 64:
+                    raise ValueError("request timestamp is too long")
+                validate_path_component(item["id"], label="request id", max_length=128)
                 requests.append(item)
             except (ValueError, OSError) as error:
                 errors.append(f"{path}: {error}")

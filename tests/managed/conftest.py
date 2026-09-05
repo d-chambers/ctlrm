@@ -100,6 +100,12 @@ class FakeTerminal:
             raise KeyboardInterrupt("simulated supervisor crash")
         return {"name": name, "token": spec["token"]}
 
+    def adopt(self, spec: dict) -> dict:
+        """Reconcile an existing fake terminal without creating another."""
+        if not self.exists(spec):
+            raise ValueError("launch disappeared")
+        return self.ensure(spec)
+
     def health(self, spec: dict, identity: dict) -> str:
         """A shell can remain after its provider exits."""
         value = self.terminals.get(identity["name"])

@@ -61,3 +61,73 @@ class TestArea:
         git(repository, "checkout", "--detach")
         with pytest.raises(ValueError):
             worktree(repository)
+
+
+class TestLegacyAdoption:
+    """Explicit adoption preserves stable signatures rather than replacing their owner."""
+
+    def test_author_identity_is_preserved(self, repository: Path, profile) -> None:
+        """A compatible legacy author keeps its name, capabilities, and room ID."""
+        from ctlrm.runtime.room import RoomRuntime
+        from ctlrm.runtime.manifest import RoomManifest, RoleAssignment
+
+        room = RoomRuntime(repository)
+        manifest = RoomManifest(
+            id="legacy",
+            author="coordinator",
+            created_at="2026-09-05T00:00:00+00:00",
+            prompt="Task",
+            assignments=[
+                RoleAssignment(participant="coordinator", role="coordinator"),
+                RoleAssignment(participant="agent", role="worker"),
+            ],
+        )
+        room.initialize(
+            manifest,
+            name="Owner",
+            kind="human",
+            provider=None,
+            capabilities=[],
+            joined_at=manifest.created_at,
+        )
+        original = room.signature_path("coordinator").read_bytes()
+        area = Area.create(
+            repository,
+            mode="standalone",
+            roles={
+                "agent": {"name": "Agent", "kind": "agent", "role": "worker", "profile": "test"}
+            },
+            profiles={"test": profile.model_dump()},
+            prompt="Task",
+            adopt=True,
+        )
+        assert area.data["room_id"] == "legacy"
+        assert area.room.signature_path("coordinator").read_bytes() == original
+
+
+class TestRuntimeSymlinks:
+    """Coordination data cannot be redirected into another worktree's storage."""
+
+    def test_external_runtime_rejected(self, repository: Path, tmp_path_factory) -> None:
+        """Reject before creating a lock or writing any redirected state."""
+        elsewhere = tmp_path_factory.mktemp("external-runtime")
+        (repository / ".ctlrm").symlink_to(elsewhere, target_is_directory=True)
+        with pytest.raises(ValueError, match="symlink"):
+            Area.create(repository, mode="standalone", roles={}, profiles={}, prompt="Task")
+        assert list(elsewhere.iterdir()) == []
+
+
+class TestInitializationRetry:
+    """A running supervisor must not prevent idempotent client launch retries."""
+
+    def test_retry_while_supervisor_holds_lock(self, area) -> None:
+        """Reuse immutable identity without taking the lifetime writer lock."""
+        with area.journal.writer():
+            reused = Area.create(
+                area.root,
+                mode=area.data["mode"],
+                roles=area.data["roles"],
+                profiles=area.data["profiles"],
+                prompt=area.data["prompt"],
+            )
+        assert reused.data["id"] == area.data["id"]

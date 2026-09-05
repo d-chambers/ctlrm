@@ -61,3 +61,29 @@ class TestJournal:
         publish(path, {"value": 1})
         with pytest.raises(ValueError, match="conflict"):
             publish(path, {"value": 2})
+
+
+class TestDeepRequest:
+    """A pathological client file cannot crash supervision of other participants."""
+
+    def test_nested_request_is_diagnosed(self, area) -> None:
+        """Excessive JSON nesting is rejected before it reaches domain transitions."""
+        area.journal.submit("launch", {"participant": "agent"}, "good")
+        path = area.room.root / "supervisor/requests/deep.json"
+        path.write_text('{"payload":' + "[" * 1500 + "0" + "]" * 1500 + "}")
+        requests, errors = area.journal.pending(area.journal.replay()[0])
+        assert len(requests) == 1
+        assert "nesting is too deep" in errors[0]
+
+
+class TestRequestMetadataBounds:
+    """Oversized rejected input must not poison the immutable disposition journal."""
+
+    def test_large_kind_is_diagnosed(self, area) -> None:
+        """Do not duplicate megabytes of an invalid kind into rejection events."""
+        area.journal.submit("x" * 100000, {}, "large-kind")
+        area.journal.submit("supervisor-stop", {}, "valid")
+        requests, errors = area.journal.pending(area.journal.replay()[0])
+        assert [request["id"] for request in requests] == ["valid"]
+        assert "bounded ASCII" in errors[0]
+        assert len(errors[0]) < 1000

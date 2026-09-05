@@ -17,7 +17,8 @@ def process_identity(pid: int) -> str | None:
         value = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
         if value[0] == "Z":
             return None
-        return f"{pid}:{value[19]}"
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return f"{boot}:{pid}:{value[19]}"
     except FileNotFoundError:
         return None
 
@@ -40,6 +41,10 @@ class Terminal(Protocol):
 
     def ensure(self, spec: dict) -> dict:
         """Create or reconcile a verified owned terminal."""
+        ...
+
+    def adopt(self, spec: dict) -> dict:
+        """Verify an existing launch without creating one if it disappeared."""
         ...
 
     def health(self, spec: dict, identity: dict) -> str:
@@ -146,6 +151,13 @@ class TmuxTerminal:
         session.set_option("@ctlrm-session", spec["id"])
         session.set_option("@ctlrm-generation", str(spec["generation"]))
         return identity
+
+    def adopt(self, spec: dict) -> dict:
+        """Reconcile an existing launch without starting a process on a race."""
+        session = self._session(spec)
+        if session is None:
+            raise ValueError("launch disappeared before readiness reconciliation")
+        return self._identity(spec, session)
 
     def _verified(self, spec: dict, identity: dict):
         """Resolve a recorded terminal and reject server restart/PID reuse."""

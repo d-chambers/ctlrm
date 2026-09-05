@@ -104,9 +104,9 @@ class SessionService:
             name=role["name"],
             kind="agent",
             provider=profile.provider,
-            capabilities=["managed-session"],
+            capabilities=role.get("capabilities", ["managed-session"]),
             joined_at=now(),
-            restart_command=None,
+            restart_command=role.get("restart_command"),
             resume=True,
         )
         record = {
@@ -155,6 +155,7 @@ class SessionEngine:
                 "native recovery information is unavailable; explicit replacement required"
             )
         if not resume:
+            session.pop("recovery", None)
             session["native_id"] = profile.native_id()
         session["generation"] += 1
         generation = session["generation"]
@@ -252,7 +253,7 @@ class SessionEngine:
             return
         session = self._session(payload, generation=kind not in {"stop", "resume", "replace"})
         if kind == "ready":
-            if session["status"] not in {"starting", "ready", "reconciling"}:
+            if session["status"] not in {"spawning", "starting", "ready", "reconciling"}:
                 raise ValueError("session is not awaiting readiness")
             revision = payload["revision"]
             from ctlrm.runtime.paths import validate_path_component
@@ -281,6 +282,8 @@ class SessionEngine:
             if session.get("native_id") and session["native_id"] != record["native_id"]:
                 raise ValueError("native session ID changed during resume")
             self.area.room.read_signature(session["participant"])
+            if session["status"] == "spawning":
+                session["identity"] = self.terminal.adopt(session["spec"])
             session.update(
                 native_id=record["native_id"],
                 recovery=record,
@@ -359,7 +362,7 @@ class SessionEngine:
             session.pop("reconciliation", None)
             return
         if kind == "stop":
-            session.update(stopped=True, status="stopping")
+            session.update(stopped=True, ready=False, status="stopping")
             return
         if kind in {"resume", "replace"}:
             if not session.get("identity") and self.terminal.exists(session["spec"]):
@@ -401,7 +404,7 @@ class SessionEngine:
                 result = {"status": "accepted"}
             except (ValueError, KeyError, TypeError, OSError, RuntimeError) as error:
                 self.state = before
-                result = {"status": "rejected", "error": str(error)}
+                result = {"status": "rejected", "error": str(error)[:2048]}
             self.state["requests"][request["id"]] = result
             self.commit("request", {"id": request["id"], **result})
         if self.state["shutdown"]:
@@ -468,19 +471,7 @@ class SessionEngine:
                 "readiness timeout: inspect the terminal for trust, permission, or bootstrap errors"
             )
         if health != "running" and (session["ready"] or self.clock() - session["created"] > 2):
-            if not session.get("recovery"):
-                raise ValueError("provider exited before acknowledging native recovery")
-            if session["recoveries"] >= profile.recovery_limit:
-                raise ValueError(
-                    "native recovery limit reached; explicitly resume, replace, or stop"
-                )
-            session["recoveries"] += 1
-            session.update(
-                status="backoff",
-                ready=False,
-                retry_at=self.clock() + profile.backoff * session["recoveries"],
-            )
-            self.commit("provider-exited", {"session_id": session["id"]})
+            self._schedule_recovery(session, profile)
             return
         if session["ready"]:
             outbound = (
@@ -498,7 +489,29 @@ class SessionEngine:
                 # Repeated wake hints preserve one logical message/work ID; acting requires acknowledgment.
                 key = (session["id"], session["generation"], outbound["id"])
                 if self.clock() - self.woken.get(key, float("-inf")) >= 15:
-                    self.terminal.wake(
-                        spec, session["identity"], reference(session["participant"], outbound["id"])
-                    )
+                    try:
+                        self.terminal.wake(
+                            spec,
+                            session["identity"],
+                            reference(session["participant"], outbound["id"]),
+                        )
+                    except (ValueError, RuntimeError):
+                        if self.terminal.health(spec, session["identity"]) == "running":
+                            raise
+                        self._schedule_recovery(session, profile)
+                        return
                     self.woken[key] = self.clock()
+
+    def _schedule_recovery(self, session: dict, profile: ProviderProfile) -> None:
+        """Retry a confirmed death without confusing it with an ownership failure."""
+        if not session.get("recovery"):
+            raise ValueError("provider exited before acknowledging native recovery")
+        if session["recoveries"] >= profile.recovery_limit:
+            raise ValueError("native recovery limit reached; explicitly resume, replace, or stop")
+        session["recoveries"] += 1
+        session.update(
+            status="backoff",
+            ready=False,
+            retry_at=self.clock() + profile.backoff * session["recoveries"],
+        )
+        self.commit("provider-exited", {"session_id": session["id"]})

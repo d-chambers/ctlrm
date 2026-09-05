@@ -1,5 +1,6 @@
 """Immutable coordination identity for one Git worktree and branch."""
 
+import copy
 import fcntl
 import os
 from pathlib import Path
@@ -62,6 +63,8 @@ class Area:
     def load(cls, path: Path) -> "Area":
         """Load an area through Git, retaining branch drift for status inspection."""
         root = Path(git(path, "rev-parse", "--show-toplevel")).resolve()
+        if (root / ".ctlrm").is_symlink():
+            raise ValueError("coordination runtime must not be a symlink")
         data = read_record(root / ".ctlrm/area.yaml")
         if data.get("schema_version") != 1:
             raise ValueError("unsupported coordination area schema")
@@ -81,6 +84,8 @@ class Area:
     ) -> "Area":
         """Snapshot one instance, refusing unrelated work or implicit legacy adoption."""
         root, branch = worktree(path)
+        if (root / ".ctlrm").is_symlink():
+            raise ValueError("coordination runtime must not be a symlink")
         journal = Journal(root)
         spec = {
             "mode": mode,
@@ -89,15 +94,42 @@ class Area:
             "prompt": prompt,
             "definition": definition,
         }
+        spec = copy.deepcopy(spec)
+        coordinator = {
+            "name": "Control room",
+            "kind": "human",
+            "provider": None,
+            "capabilities": ["coordinate"],
+            "restart_command": None,
+        }
+        area_path = root / ".ctlrm/area.yaml"
+
+        def existing() -> "Area | None":
+            """Retry compatible initialization without acquiring the daemon's lifetime lock."""
+            if not area_path.exists():
+                return None
+            area = cls.load(root)
+            area.validate()
+            if any(
+                (
+                    area.data.get("requested_roles", area.data["roles"])
+                    if key == "roles"
+                    else area.data.get(key)
+                )
+                != value
+                for key, value in spec.items()
+            ):
+                raise ValueError("this worktree already coordinates another instance")
+            area.ensure_room()
+            return area
+
+        reused = existing()
+        if reused is not None:
+            return reused
         with journal.writer():
-            area_path = root / ".ctlrm/area.yaml"
-            if area_path.exists():
-                area = cls.load(root)
-                area.validate()
-                if any(area.data.get(key) != value for key, value in spec.items()):
-                    raise ValueError("this worktree already coordinates another instance")
-                area.ensure_room()
-                return area
+            reused = existing()
+            if reused is not None:
+                return reused
             children = [p for p in (root / ".ctlrm").iterdir() if p.name != "supervisor"]
             if children and not adopt:
                 raise ValueError("populated legacy area: use a fresh worktree or explicit --adopt")
@@ -117,6 +149,25 @@ class Area:
                     )
                 if legacy.prompt != prompt:
                     raise ValueError("legacy prompt must match the requested instance")
+                legacy_runtime = RoomRuntime(root)
+                if legacy_runtime.signature_path("coordinator").exists():
+                    signature = legacy_runtime.read_signature("coordinator")
+                    coordinator = signature.model_dump(include=set(coordinator))
+                for participant, role in spec["roles"].items():
+                    if not legacy_runtime.signature_path(participant).exists():
+                        continue
+                    signature = legacy_runtime.read_signature(participant)
+                    provider = (
+                        profiles[role["profile"]]["provider"] if role["kind"] == "agent" else None
+                    )
+                    if (signature.name, signature.kind, signature.provider) != (
+                        role["name"],
+                        role["kind"],
+                        provider,
+                    ):
+                        raise ValueError(f"legacy participant identity conflicts: {participant}")
+                    role["capabilities"] = signature.capabilities
+                    role["restart_command"] = signature.restart_command
                 room_id = legacy.id
             data = {
                 "schema_version": 1,
@@ -125,6 +176,8 @@ class Area:
                 "branch": branch,
                 "room_id": room_id,
                 "created_at": now(),
+                "coordinator": coordinator,
+                "requested_roles": roles,
                 **spec,
             }
             ignore_runtime(root)
@@ -156,9 +209,14 @@ class Area:
         )
         self.room.initialize(
             manifest,
-            name="Control room",
-            kind="human",
-            provider=None,
-            capabilities=["coordinate"],
+            **self.data.get(
+                "coordinator",
+                {
+                    "name": "Control room",
+                    "kind": "human",
+                    "provider": None,
+                    "capabilities": ["coordinate"],
+                },
+            ),
             joined_at=self.data["created_at"],
         )

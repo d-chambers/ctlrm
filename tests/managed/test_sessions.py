@@ -149,3 +149,89 @@ class TestPermissionBoundaries:
         assert session(engine)["work"]["status"] == "pending"
         assert not terminal.wakes
         assert len(area.room.read_inbox("agent")) == 2
+
+
+class TestStopCompletionRace:
+    """The first committed stop prevents later reports from reviving a session."""
+
+    def test_stop_wins_over_late_completion(self, managed) -> None:
+        """Completion arriving in the same poll cannot undo accepted stop intent."""
+        area, engine, terminal, client = managed
+        current = session(engine)
+        client.request("prompt", {"session_id": current["id"], "generation": 1, "text": "Work"})
+        engine.tick()
+        work_id = session(engine)["work"]["id"]
+        client.request(
+            "acknowledge", {"session_id": current["id"], "generation": 1, "work_id": work_id}
+        )
+        engine.tick()
+        client.request("stop", {"session_id": current["id"]})
+        late = client.request(
+            "disposition",
+            {
+                "session_id": current["id"],
+                "generation": 1,
+                "work_id": work_id,
+                "status": "completed",
+            },
+        )
+        engine.tick()
+        assert engine.state["requests"][late]["status"] == "rejected"
+        assert session(engine)["status"] == "stopped"
+        assert not terminal.terminals
+
+
+class TestRecoveryBoundaries:
+    """Recovery authorization belongs to the native conversation that acknowledged it."""
+
+    def test_death_during_wake_retries(self, managed, monkeypatch) -> None:
+        """A provider can die after health inspection but before terminal delivery."""
+        area, engine, terminal, client = managed
+        current = session(engine)
+
+        def fail_wake(spec, identity, reference):
+            """Inject death precisely at the terminal delivery boundary."""
+            terminal.terminals[spec["terminal_name"]]["health"] = "exited"
+            raise ValueError("provider is not running")
+
+        monkeypatch.setattr(terminal, "wake", fail_wake)
+        client.request("prompt", {"session_id": current["id"], "generation": 1, "text": "Work"})
+        engine.tick()
+        assert session(engine)["status"] == "backoff"
+        assert session(engine)["work"]["status"] == "pending"
+
+    def test_replacement_requires_own_recovery(self, managed) -> None:
+        """A fresh conversation cannot inherit the old conversation's readiness proof."""
+        area, engine, terminal, client = managed
+        current = session(engine)
+        original_native = current["native_id"]
+        client.request("stop", {"session_id": current["id"]})
+        engine.tick()
+        client.request("replace", {"session_id": current["id"]})
+        engine.tick()
+        replacement = session(engine)
+        assert replacement["generation"] == 2
+        assert replacement["native_id"] != original_native
+        assert not replacement.get("recovery")
+        assert not replacement["ready"]
+
+
+class TestReadyAfterLaunchCrash:
+    """Readiness can arrive while a created terminal still awaits its creation commit."""
+
+    def test_queued_readiness_is_accepted(self, area) -> None:
+        """Adopt before accepting the generation acknowledgment, without another spawn."""
+        terminal = FakeTerminal()
+        terminal.crash = True
+        with area.journal.writer():
+            client = SessionService(area)
+            client.request("launch", {"participant": "agent"})
+            with pytest.raises(KeyboardInterrupt):
+                SessionEngine(area, terminal).tick()
+            current = next(iter(area.journal.replay()[0]["sessions"].values()))
+            request = client.ready(current["id"], 1, current["native_id"])
+            restarted = SessionEngine(area, terminal)
+            restarted.tick()
+            assert restarted.state["requests"][request]["status"] == "accepted"
+            assert session(restarted)["ready"]
+            assert terminal.launches == 1

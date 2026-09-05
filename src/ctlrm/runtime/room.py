@@ -88,6 +88,8 @@ class RoomRuntime(ProjectRuntime):
 
     def init_project(self) -> None:
         """Create the minimal room directories for a shared Unix group."""
+        if not self.project_root.is_dir():
+            raise NotADirectoryError(f"project root must already exist: {self.project_root}")
         _mkdir_shared(self.root)
         _mkdir_shared(self.root / "participants")
 
@@ -131,6 +133,13 @@ class RoomRuntime(ProjectRuntime):
         registration instead of replacing the room. A different prompt, roster, or
         author remains a conflict.
         """
+        if not self.room_path.exists() and (self.root / "participants").exists():
+            signatures = sorted((self.root / "participants").glob("*.yaml"))
+            if signatures:
+                raise ValueError(
+                    f"room manifest is missing but participant data exists: {signatures[0]}; "
+                    "restore room.md or use a fresh coordination directory"
+                )
         created = True
         try:
             self.write_room(room)
@@ -270,6 +279,7 @@ class RoomRuntime(ProjectRuntime):
         """Deliver an immutable message between registered participants."""
         self.read_signature(message.from_)
         self.read_signature(message.to)
+        self.init_participant(message.to)
         path = self.root / "participants" / message.to / "inbox" / f"{message.id}.md"
         _write_exclusive_atomic(path, message.to_markdown())
         return path

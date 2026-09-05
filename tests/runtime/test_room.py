@@ -610,3 +610,32 @@ class TestPromptLineEndings:
                 joined_at="2026-09-05T12:00:00+00:00",
             )
         assert runtime.read_room().prompt == "First\n    Second"
+
+
+class TestRoomRecoveryFailures:
+    """Recovery preserves explicit roots and shared mailbox ownership."""
+
+    def test_missing_root(self, tmp_path: Path) -> None:
+        """A typo must not create a new project tree."""
+        with pytest.raises(NotADirectoryError, match="already exist"):
+            initialize(RoomRuntime(tmp_path / "typo"))
+        assert not (tmp_path / "typo").exists()
+
+    def test_missing_inbox(self, tmp_path: Path) -> None:
+        """Recreated recipient mailboxes retain group write access."""
+        runtime = RoomRuntime(tmp_path)
+        initialize(runtime)
+        join_reviewer(runtime)
+        inbox = runtime.root / "participants/reviewer/inbox"
+        inbox.rmdir()
+        runtime.send_message(message())
+        assert inbox.stat().st_mode & 0o2770 == 0o2770
+
+    def test_orphaned_signature(self, tmp_path: Path) -> None:
+        """A missing manifest cannot be replaced over another room's identities."""
+        runtime = RoomRuntime(tmp_path)
+        initialize(runtime)
+        runtime.room_path.unlink()
+        with pytest.raises(ValueError, match="restore room.md"):
+            initialize(runtime)
+        assert not runtime.room_path.exists()

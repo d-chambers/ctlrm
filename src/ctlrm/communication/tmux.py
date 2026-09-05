@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import subprocess
+import libtmux
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -78,14 +78,13 @@ class CommandRunner(Protocol):
 
 
 class SubprocessCommandRunner:
-    """Command runner backed by ``subprocess.run``."""
+    """Legacy command interface backed by libtmux; managed sessions use TmuxTerminal."""
 
     def run(self, command: TmuxCommand) -> str:
         """Execute a tmux command and return stdout."""
-        result = subprocess.run(
-            [command.program, *command.args],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return result.stdout
+        if command.program != "tmux":
+            raise ValueError("the terminal runner accepts only tmux operations")
+        result = libtmux.Server().cmd(*command.args)
+        if result.returncode:
+            raise RuntimeError("; ".join(result.stderr))
+        return "\n".join(result.stdout)

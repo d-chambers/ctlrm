@@ -233,3 +233,184 @@ class TestDeliveryRecovery:
             unjoined = client.request("workflow-ack", payload)
             engine.tick()
             assert engine.state["requests"][unjoined]["status"] == "rejected"
+
+
+class TestPrecommitFailures:
+    """Rejected initialization and failed commits must not leak executable work."""
+
+    def test_blank_task_does_not_claim_area(self, repository, template) -> None:
+        """All task validation happens before immutable area publication."""
+        with pytest.raises(ValueError, match="nonblank"):
+            WorkflowService.submit(repository, template, "Task", "   ")
+        assert not (repository / ".ctlrm/area.yaml").exists()
+
+    def test_assignment_commit_failure_cannot_wake(self, repository, template, monkeypatch) -> None:
+        """A failed assignment commit rolls memory back before any terminal delivery."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            client.request("launch", {"participant": "implementer"})
+            engine.tick()
+            current = next(iter(engine.state["sessions"].values()))
+            client.ready(current["id"], 1, current["native_id"])
+            original = engine.commit
+
+            def fail_assignment(kind, detail=None):
+                """Inject a disk failure precisely at assignment commit."""
+                if kind == "assignment-planned":
+                    raise OSError("disk full")
+                original(kind, detail)
+
+            monkeypatch.setattr(engine, "commit", fail_assignment)
+            errors = engine.tick()
+            assert errors and not terminal.wakes
+            assert engine.active()["message"] is None
+            assert next(iter(engine.state["sessions"].values()))["work"] is None
+
+
+class TestHumanIdentity:
+    """Legacy room access cannot bypass the managed human role contract."""
+
+    def test_conflicting_signature(self, repository, template) -> None:
+        """A participant signed as an agent cannot approve a human workflow step."""
+        from ctlrm.managed.storage import now
+
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            complete(engine, client, "completed")
+            complete(engine, client, "approved")
+            client.area.room.join_participant(
+                participant_id="owner",
+                name="owner",
+                kind="agent",
+                provider="codex",
+                capabilities=[],
+                joined_at=now(),
+                restart_command=None,
+            )
+            execution = engine.active()
+            request = client.request(
+                "workflow-ack",
+                {
+                    "run_id": engine.state["run"]["id"],
+                    "execution_id": execution["id"],
+                    "participant": "owner",
+                },
+            )
+            engine.tick()
+            assert engine.state["requests"][request]["status"] == "rejected"
+            assert "signature conflicts" in engine.state["requests"][request]["error"]
+
+
+class TestUncertainOutcome:
+    """An uncertainty block requires explicit reconciliation before task completion."""
+
+    def test_blocked_session_cannot_report(self, repository, template) -> None:
+        """Readiness alone is not authority after a participant reports uncertain effects."""
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build")
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, FakeTerminal())
+            engine.tick()
+            payload = prepare(engine, client)
+            client.request("workflow-ack", payload)
+            engine.tick()
+            client.request(
+                "disposition",
+                {**payload, "work_id": payload["execution_id"], "status": "uncertain"},
+            )
+            engine.tick()
+            report = client.request(
+                "workflow-report", {**payload, "outcome": "completed", "summary": "Done"}
+            )
+            engine.tick()
+            assert engine.state["requests"][report]["status"] == "rejected"
+            assert engine.active()["id"] == payload["execution_id"]
+
+
+class TestSubmissionIdentity:
+    """Invalid request IDs cannot reserve an otherwise fresh worktree."""
+
+    def test_invalid_request_id(self, repository, template) -> None:
+        """Validate the client retry key before publishing the area snapshot."""
+        with pytest.raises(ValueError, match="request id"):
+            WorkflowService.submit(repository, template, "Task", "Build", request_id="bad/id")
+        assert not (repository / ".ctlrm/area.yaml").exists()
+        client, _ = WorkflowService.submit(
+            repository, template, "Task", "Build", request_id="valid"
+        )
+        assert client.area.data["mode"] == "workflow"
+
+
+class TestWorkflowCli:
+    """User-visible commands use the same service and committed request results."""
+
+    def test_submit_and_human_response(self, repository, monkeypatch) -> None:
+        """A human-only workflow completes through the public Typer interface."""
+        import json
+        from typer.testing import CliRunner
+        from ctlrm.__main__ import app
+        from ctlrm.managed import supervisor
+
+        template_path = repository / "workflow.json"
+        template_path.write_text(
+            json.dumps(
+                {
+                    "name": "approval",
+                    "entry": "approve",
+                    "profiles": {},
+                    "roles": {"owner": {"kind": "human"}},
+                    "steps": {
+                        "approve": {
+                            "role": "owner",
+                            "transitions": {"approved": "terminal:completed"},
+                        }
+                    },
+                }
+            )
+        )
+        task_path = repository / "task.txt"
+        task_path.write_text("Check the task")
+
+        def start(area):
+            """Drive the actual engine synchronously instead of starting a daemon."""
+            with area.journal.writer():
+                WorkflowEngine(area, FakeTerminal()).tick()
+
+        monkeypatch.setattr(supervisor, "start", start)
+        runner = CliRunner()
+        prefix = ["--root", str(repository), "workflow"]
+        result = runner.invoke(app, [*prefix, "validate", "--template", str(template_path)])
+        assert result.exit_code == 0, result.output
+        result = runner.invoke(
+            app,
+            [
+                *prefix,
+                "submit",
+                "--template",
+                str(template_path),
+                "--title",
+                "Task",
+                "--file",
+                str(task_path),
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        result = runner.invoke(app, [*prefix, "status"])
+        state = json.loads(result.output)["state"]
+        run = state["run"]
+        args = ["--run-id", run["id"], "--execution-id", run["active"], "--participant", "owner"]
+        assert runner.invoke(app, [*prefix, "join", "--participant", "owner"]).exit_code == 0
+        result = runner.invoke(app, [*prefix, "acknowledge", *args])
+        assert result.exit_code == 0, result.output
+        result = runner.invoke(
+            app, [*prefix, "report", *args, "--outcome", "approved", "--summary", "Accepted"]
+        )
+        assert result.exit_code == 0, result.output
+        assert (
+            json.loads(runner.invoke(app, [*prefix, "status"]).output)["state"]["run"]["status"]
+            == "completed"
+        )

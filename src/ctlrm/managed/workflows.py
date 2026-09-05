@@ -9,6 +9,7 @@ from ctlrm.managed.area import Area, worktree
 from ctlrm.managed.sessions import SessionEngine, SessionService, mailbox, message
 from ctlrm.managed.storage import identifier, now
 from ctlrm.runtime.participants import validate_participant_id
+from ctlrm.runtime.paths import validate_path_component
 from ctlrm.runtime.workflows import StepExecution, Task, WorkflowRun, WorkflowTemplate
 from ctlrm.scheduler import transition
 
@@ -28,6 +29,8 @@ class WorkflowService(SessionService):
         request_id: str | None = None,
     ) -> tuple["WorkflowService", str]:
         """Snapshot one task and template into a fresh area, with idempotent retries."""
+        if request_id is not None:
+            validate_path_component(request_id, label="request id", max_length=128)
         root, _ = worktree(root)
         bindings = bindings or {name: name for name in template.roles}
         if set(bindings) != set(template.roles) or len(set(bindings.values())) != len(bindings):
@@ -141,12 +144,27 @@ class WorkflowEngine(SessionEngine):
             or payload.get("participant") != execution["participant"]
         ):
             raise ValueError("unknown or inactive run/execution/participant")
-        self.area.room.read_signature(execution["participant"])
+        signature = self.area.room.read_signature(execution["participant"])
         role = self.area.data["roles"][execution["participant"]]
+        expected_provider = (
+            self.area.data["profiles"][role["profile"]]["provider"]
+            if role["kind"] == "agent"
+            else None
+        )
+        if (signature.kind, signature.name, signature.provider) != (
+            role["kind"],
+            role["name"],
+            expected_provider,
+        ):
+            raise ValueError("participant signature conflicts with the managed role")
         session = None
         if role["kind"] == "agent":
             session = self._session(payload)
-            if session["id"] != execution["session_id"] or not session["ready"]:
+            if (
+                session["id"] != execution["session_id"]
+                or not session["ready"]
+                or session["status"] not in {"ready", "reconciling"}
+            ):
                 raise ValueError("execution session is not ready or does not own the work")
             if session["recovering"]:
                 raise ValueError("reconcile recovered work before reporting an outcome")
@@ -169,6 +187,7 @@ class WorkflowEngine(SessionEngine):
             if kind == "workflow-ack":
                 execution["status"] = "acknowledged"
                 if session:
+                    execution["generation"] = session["generation"]
                     super().apply("acknowledge", {**payload, "work_id": execution["id"]})
                 return
             if execution["status"] != "acknowledged":

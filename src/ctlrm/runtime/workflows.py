@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ctlrm.managed.providers import ProviderProfile
 from ctlrm.runtime.documents import load_yaml
@@ -106,6 +106,14 @@ class Task(Record):
     id: str
     title: str = Field(min_length=1, max_length=256)
     instructions: str = Field(min_length=1, max_length=65536)
+
+    @field_validator("title", "instructions")
+    @classmethod
+    def validate_text(cls, value: str) -> str:
+        """Reject blank task text before publishing any immutable area files."""
+        if not value.strip() or len(value.encode()) > 65536:
+            raise ValueError("task text must be nonblank and at most 65536 bytes")
+        return value
 
 
 class StepExecution(Record):

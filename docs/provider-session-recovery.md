@@ -6,14 +6,14 @@ Date: 2026-09-05
 
 | Provider | Installed version | Native session identity | Resume command | Evidence |
 | --- | --- | --- | --- | --- |
-| Claude Code | 2.1.261 | Controller allocates a UUID through `--session-id`; agent acknowledges it in its recovery response | `claude --resume <session-id>` with the same transport options | Passed: native ID and previously supplied conversation token retained after SIGKILL |
+| Claude Code | 2.1.261 | Controller allocates a UUID through `--session-id`; agent acknowledges it in its recovery response | `claude --resume <session-id>` with the same transport options | Passed in streamed and interactive terminal modes: native ID and conversation token retained after SIGKILL |
 | Codex | 0.153.4 | To be verified in the second-provider milestone | Not yet verified | No recovery claim yet |
 
 Terminal management used libtmux 0.62.0 and tmux 3.4 on Linux. The probe ran in a disposable linked Git worktree on its own branch and isolated tmux socket with `/dev/null` as the tmux configuration. It did not access application source or credentials through agent tools.
 
 ## Verified Claude transport
 
-The probe used Claude's persistent print-mode stream interface, with a FIFO kept open for successive user messages and JSONL output written to a temporary evidence file. This verifies native conversation persistence and restart in a managed terminal; it does not yet verify the interactive full-screen UI or the future ctlrm mailbox bootstrap.
+The probe used Claude's persistent print-mode stream interface, with a FIFO kept open for successive user messages and JSONL output written to a temporary evidence file. A second probe also verified the native interactive terminal path described below. Neither probe implements the future ctlrm mailbox bootstrap.
 
 Initial argument vector:
 
@@ -27,11 +27,11 @@ Resume argument vector:
 claude --print --input-format stream-json --output-format stream-json --verbose --tools '' --strict-mcp-config --permission-mode plan --resume <same-uuid>
 ```
 
-Here `''` denotes one empty argument, disabling tools for this bounded probe. Production profiles must specify their intended tools and permissions separately. Session persistence must remain enabled; `--no-session-persistence` is incompatible with this contract. The probe had no `ANTHROPIC_*`, `CLAUDE_*`, or `CLAUDECODE` environment variables set, including no `CLAUDE_CONFIG_DIR` override. It used the existing authenticated local Claude installation and the default native state context under `~/.claude` (`~/.claude/projects` was present). Resume ran as the same OS user, with the same home directory and workdir. No extra provider environment names were required for this tested profile; `PATH` must resolve the same Claude executable. Other profiles must record their required variable names and explicit state-directory context. No credential values were captured in the recovery record.
+Here `''` denotes one empty argument, disabling tools for this bounded probe. Production profiles must specify their intended tools and permissions separately. `--fork-session` must be absent: the test requires retaining the native ID rather than creating a fork. Session persistence must remain enabled; `--no-session-persistence` is incompatible with this contract. The probe had no `ANTHROPIC_*`, `CLAUDE_*`, or `CLAUDECODE` environment variables set, including no `CLAUDE_CONFIG_DIR` override. It used the existing authenticated local Claude installation and the default native state context under `~/.claude` (`~/.claude/projects` was present). Resume ran as the same OS user, with the same home directory and workdir. These variables were observed absent before the isolated server was started; they were not silently scrubbed. No extra provider environment names were required for this tested profile; `PATH` must resolve the same Claude executable. Other profiles must record their required variable names and explicit state-directory context. No credential values were captured in the recovery record.
 
 Each input line was a JSON object with `type: user` and a `message` containing `role: user` and text `content`. The first prompt supplied a random conversation token plus the allocated session ID and requested readiness and restart instructions. The agent returned `ready: true`, the supplied session ID, and `resume_argv` referring to that exact ID. A successful provider result event recorded the same native session ID.
 
-After that first turn completed, the probe identified the provider child of its managed shell and sent SIGKILL to that child while it awaited more input. It started another managed terminal using `--resume` and requested status reconciliation and the remembered token without including that token in the resume prompt. The response returned `ready: true` and the exact original token; the result event retained the original session ID. Both provider result events reported success. The isolated tmux server was then stopped.
+After that first turn completed, the probe read the managed pane PID, queried its direct children with `ps -o pid= --ppid <pane-pid>`, asserted exactly one provider child, and identified that child and sent SIGKILL to that child while it awaited more input. It started another managed terminal using `--resume` and requested status reconciliation and the remembered token without including that token in the resume prompt. The response returned `ready: true` and the exact original token; the result event retained the original session ID. Both provider result events reported success. The isolated tmux server was then stopped.
 
 This is evidence of recovery after a completed turn followed by unexpected process death. It does not prove recovery of an unfinished tool call, exactly-once effects, missing state files, changed credentials, or host reboot. Those cases require the planned uncertain-work and replacement paths.
 
@@ -43,12 +43,20 @@ This is evidence of recovery after a completed turn followed by unexpected proce
 - Supervise the provider process, not just the pane. The successful probe retained a shell parent; direct `exec` startup attempts ended with SIGHUP in this environment and are not the validated launch path. Diagnose that difference in the terminal/provider adapter implementation rather than assuming both forms work.
 - Use libtmux with an isolated/configured server and an explicit shell wrapper for the verified path. In the probe, the shell and provider were distinct processes, so the shell surviving provider death did not count as recovery.
 - Resume with a status query for the prior work ID. The token test establishes context retention, not whether arbitrary interrupted work already took effect.
-- Keep machine-specific logs, session IDs, and the disposable token under temporary `.scratch/`; the committed capability matrix contains the reproducible procedure and its measured limits.
+- Keep full machine-specific logs under temporary `.scratch/`. A small committed evidence excerpt records matching IDs and the burned, disposable test token without credentials.
 
 ## Reproduction checklist
 
-1. Create a disposable linked worktree and isolated libtmux server; open an explicit shell pane and retain the FIFO's writer endpoint.
+1. Verify provider-related environment names without printing their values and preserve the same native state context for both launches. The observed run had none set; do not silently change authentication settings to reproduce it. Create a disposable linked worktree and isolated libtmux server; open an explicit shell pane and retain the FIFO's writer endpoint.
 2. Launch the initial argument vector with a new UUID. Supply an unpredictable token and ask for a recovery acknowledgment.
 3. Wait for a successful result carrying that UUID, then terminate only that provider child with SIGKILL.
 4. Launch the resume vector using the same provider environment and workdir; request the earlier token without resupplying it.
 5. Assert identical native IDs, successful result events, readiness, and exact token equality. Stop only the isolated test server and preserve any wanted evidence before manual cleanup.
+
+## Verified interactive terminal path
+
+The second probe used an explicit `/bin/sh` pane on an isolated libtmux server and launched `claude --tools '' --strict-mcp-config --permission-mode plan --session-id <uuid> <bootstrap-prompt>`. On resume it replaced `--session-id` with `--resume` and supplied only a status-reconciliation prompt. The initial prompt supplied a fresh nonce and the controller-allocated native ID; the agent acknowledged that ID and supplied the matching resume arguments. It was then killed as the shell's verified sole provider child after its completed response.
+
+The resumed interactive agent returned the same native ID and the earlier nonce, which was not present in its new prompt. The probe inspected only the generated session's transcript and captured pane output; it did not inspect unrelated conversations. The renderer reported a fallback to its classic interactive interface, so this establishes interactive terminal operation without making a claim about a particular full-screen renderer. A workspace trust prompt was accepted only for the disposable worktree created by the probe; such prompts must remain explicit user actions for real worktrees.
+
+The successful interactive response is retained in [the evidence excerpt](evidence/provider-recovery-2026-09-05.json). The native-state context and exact working directory were unchanged on resume. Moving or deleting the original worktree is outside this proof and must trigger the planned reconciliation behavior. The terminal adapter should use this interactive shell-parent path initially, while the stream interface remains an independently demonstrated option.

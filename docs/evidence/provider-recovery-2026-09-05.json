@@ -1,0 +1,16 @@
+{
+  "provider": "claude",
+  "native_session_id": "ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd",
+  "token": "59267cc0e92f4473b979a93928c74110",
+  "initial_response": "```json\n{\"ready\": true, \"session_id\": \"ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd\", \"resume_argv\": [\"claude\", \"--resume\", \"ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd\"]}\n```",
+  "resumed_response": "```json\n{\"ready\": true, \"session_id\": \"ae4f5662-3ab4-4ca0-9c45-8b1f17af7dbd\", \"remembered_token\": \"59267cc0e92f4473b979a93928c74110\"}\n```",
+  "transport": "interactive terminal",
+  "termination": "SIGKILL provider child after completed first turn",
+  "same_session_id": true,
+  "context_retained": true,
+  "provider_version": "2.1.261",
+  "tmux_version": "3.4",
+  "libtmux_version": "0.62.0",
+  "initial_prompt_included_token": true,
+  "resume_prompt_included_token": false
+}

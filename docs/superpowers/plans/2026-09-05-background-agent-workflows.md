@@ -158,9 +158,9 @@ No filesystem transaction atomically completes an external agent operation. Guar
 
 ### 0. Prove provider recovery
 
-- [x] In a disposable Git worktree, launch one real provider, obtain agent-supplied session recovery information, terminate it, and resume the exact native conversation.
+- [x] In a disposable Git worktree, launch one real provider, obtain agent-acknowledged recovery information for a controller-allocated native ID, terminate it, and resume the exact native conversation.
 - [x] Record the capability matrix and demonstrate retained context plus a readiness/status acknowledgment after resume.
-- [x] Use this result to finalize the adapter/bootstrap contract. A failed feasibility check blocks claims of native recovery; replacement remains a separate operation.
+- [x] Use this result to select the interactive shell-parent transport and native recovery contract; implement the mailbox bootstrap in milestone 2. A failed feasibility check blocks claims of native recovery; replacement remains a separate operation.
 
 Acceptance: evidence that the core recovery requirement is achievable before building the execution machinery around it.
 

@@ -1205,3 +1205,25 @@ window.addEventListener("beforeunload", () => {
 render();
 refresh();
 setInterval(refresh, 2500);
+// A newly printed server URL may open in this already-running browser tab.
+window.addEventListener("hashchange", () => {
+  const token = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (!token) return;
+  capability = token;
+  try {
+    sessionStorage.setItem("ctlrm-token", token);
+  } catch {
+    // Access still works for this page when optional storage is unavailable.
+  }
+  history.replaceState(null, "", location.pathname);
+  closeTerminal();
+  if ($("#dialog").open) $("#dialog").close();
+  state.data = { projects: [], participants: [], actions: [] };
+  state.opened = [];
+  state.tab = "projects";
+  state.selected = null;
+  state.cache.clear();
+  lastSnapshot = "";
+  render();
+  refresh(true);
+});

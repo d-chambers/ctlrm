@@ -6,13 +6,14 @@ import subprocess
 import sys
 import time
 
+from ctlrm.runtime.location import runtime_path
 from ctlrm.managed.storage import publish, read_record
 
 
 def main() -> None:
     """Launch only the committed argv and remain inspectable after provider exit."""
     root, session_id, generation = sys.argv[1:]
-    path = Path(root) / ".ctlrm/sessions" / session_id / f"launch-{generation}.json"
+    path = runtime_path(Path(root)) / "sessions" / session_id / f"launch-{generation}.json"
     launch = read_record(path)
     if launch["token"] != os.environ.get("CTLRM_LAUNCH_TOKEN"):
         raise ValueError("host launch token does not match committed intent")

@@ -13,6 +13,7 @@ from typing import Protocol
 
 import libtmux
 
+from ctlrm.runtime.location import runtime_path
 from ctlrm.managed.storage import read_record
 
 
@@ -203,7 +204,10 @@ class TmuxTerminal:
         if children(identity["host_pid"]):
             return "running"
         exit_path = (
-            Path(spec["root"]) / ".ctlrm/sessions" / spec["id"] / f"exit-{spec['generation']}.json"
+            runtime_path(Path(spec["root"]))
+            / "sessions"
+            / spec["id"]
+            / f"exit-{spec['generation']}.json"
         )
         if exit_path.exists():
             if read_record(exit_path).get("token") != spec["token"]:

@@ -7,6 +7,7 @@ import stat
 import subprocess
 
 from ctlrm.managed.area import Area, git
+from ctlrm.runtime.location import runtime_path
 from ctlrm.managed.storage import digest, publish, read_record
 
 
@@ -60,6 +61,12 @@ def fingerprint(root: Path) -> dict:
         )
     )
     names = [name for name in names if name != ".ctlrm" and not name.startswith(".ctlrm/")]
+    if runtime_path(root) != root / ".ctlrm":
+        names = [
+            name
+            for name in names
+            if name != ".scratch/ctlrm" and not name.startswith(".scratch/ctlrm/")
+        ]
     if len(names) > 10000:
         raise ValueError("artifact exceeds 10000 files")
     files, total = {}, 0

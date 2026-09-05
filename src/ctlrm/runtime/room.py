@@ -70,6 +70,8 @@ class RoomRuntime(ProjectRuntime):
         """Create the minimal room directories for a shared Unix group."""
         if not self.project_root.is_dir():
             raise NotADirectoryError(f"project root must already exist: {self.project_root}")
+        if self.root != self.project_root / ".ctlrm" and not (self.root / "area.yaml").exists():
+            raise ValueError("central rooms must be initialized through job start")
         _mkdir_shared(self.root)
         _mkdir_shared(self.root / "participants")
 

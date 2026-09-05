@@ -648,12 +648,13 @@ class TestConcurrentInitialization:
         """Recheck the manifest after observing another initializer's signatures."""
         runtime = RoomRuntime(tmp_path)
         original = Path.exists
+        room_path = runtime.room_path
         injected = False
 
         def exists(path: Path) -> bool:
             """Complete another initialization after the first absence observation."""
             nonlocal injected
-            if path == runtime.room_path and not injected:
+            if path == room_path and not injected:
                 injected = True
                 initialize(runtime)
                 return False

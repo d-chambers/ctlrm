@@ -1,12 +1,14 @@
 """Durable standalone session transitions and provider recovery orchestration."""
 
 import copy
+from pathlib import Path
 import shlex
 import sys
 import time
 from uuid import UUID
 
 from ctlrm.communication.terminal import StopPending, Terminal, TmuxTerminal
+from ctlrm.runtime.location import runtime_reference
 from ctlrm.managed.area import Area
 from ctlrm.managed.providers import ProviderProfile
 from ctlrm.managed.storage import identifier, now, publish, read_record
@@ -42,11 +44,10 @@ def message(participant: str, kind: str, body: str, message_id: str | None = Non
     ).model_dump(by_alias=True)
 
 
-def reference(participant: str, message_id: str) -> str:
+def reference(participant: str, message_id: str, root: Path | None = None) -> str:
     """Return the bounded terminal hint for a durable mailbox record."""
-    return (
-        f"Read .ctlrm/participants/{participant}/inbox/{message_id}.md and follow its instructions."
-    )
+    directory = runtime_reference(root) if root is not None else ".ctlrm"
+    return f"Read {directory}/participants/{participant}/inbox/{message_id}.md and follow its instructions."
 
 
 def pending_message(session: dict) -> dict | None:
@@ -190,7 +191,7 @@ class SessionEngine:
                 f"{self.area.data['roles'][session['participant']].get('instructions', '')}\n"
                 f"Accept your role and acknowledge your native recovery instructions by running:\n"
                 f"{command} ready --session-id {session['id']} --generation {generation} --native-id {native}\n"
-                f"Your provider profile and context are recorded in .ctlrm/area.yaml. "
+                f"Your provider profile and context are recorded in {runtime_reference(self.area.root)}/area.yaml. "
                 f"For Codex, obtain your actual native thread ID from CODEX_THREAD_ID. "
                 f"Do not invent an ID. If it is unavailable, explain the issue and wait.\n"
                 f"After readiness, finish your turn and wait for a mailbox hint. Do not poll or run a waiting shell loop. Wait for a mailbox assignment. Before acting, obtain accepted acknowledgment by running {command} acknowledge "
@@ -212,7 +213,7 @@ class SessionEngine:
             "resume": resume,
             "argv": profile.command(
                 session["native_id"],
-                reference(session["participant"], bootstrap["id"]),
+                reference(session["participant"], bootstrap["id"], self.area.root),
                 resume=resume,
             ),
             "bootstrap": bootstrap,
@@ -519,7 +520,9 @@ class SessionEngine:
                         / f"{outbound['id']}.json",
                         {
                             "token": spec["token"],
-                            "reference": reference(session["participant"], outbound["id"]),
+                            "reference": reference(
+                                session["participant"], outbound["id"], self.area.root
+                            ),
                         },
                     )
                     return
@@ -530,7 +533,7 @@ class SessionEngine:
                         self.terminal.wake(
                             spec,
                             session["identity"],
-                            reference(session["participant"], outbound["id"]),
+                            reference(session["participant"], outbound["id"], self.area.root),
                         )
                     except (ValueError, RuntimeError):
                         current_health = self.terminal.health(spec, session["identity"])

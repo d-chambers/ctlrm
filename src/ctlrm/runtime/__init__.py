@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from ctlrm.runtime.filesystem import mkdir_shared
+from ctlrm.runtime.location import runtime_path
 from ctlrm.runtime.participants import validate_participant_id
 
 
@@ -12,7 +13,7 @@ class ProjectRuntime:
     def __init__(self, project_root: Path) -> None:
         """Initialize paths for a project runtime."""
         self.project_root = project_root
-        self.root = project_root / ".ctlrm"
+        self.root = runtime_path(project_root)
 
     def init_project(self) -> None:
         """Create project runtime directories."""

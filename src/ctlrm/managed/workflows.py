@@ -10,6 +10,7 @@ from ctlrm.managed.area import Area, worktree
 from ctlrm.managed.artifacts import capture, verify
 from ctlrm.managed.sessions import SessionEngine, SessionService, mailbox, message
 from ctlrm.managed.storage import identifier, now, read_record
+from ctlrm.runtime.location import runtime_path, runtime_reference
 from ctlrm.runtime.participants import validate_participant_id
 from ctlrm.runtime.paths import validate_path_component
 from ctlrm.runtime.workflows import JobInput, TaskExecution, WorkflowRun, WorkflowTemplate
@@ -29,6 +30,7 @@ class WorkflowService(SessionService):
         *,
         bindings: dict[str, str] | None = None,
         request_id: str | None = None,
+        job_id: str | None = None,
     ) -> tuple["WorkflowService", str]:
         """Snapshot one task and template into a fresh area, with idempotent retries."""
         if request_id is not None:
@@ -41,9 +43,17 @@ class WorkflowService(SessionService):
             validate_participant_id(participant)
             if participant == "coordinator":
                 raise ValueError("coordinator is reserved")
-        profiles = {key: value.checked().model_dump() for key, value in template.profiles.items()}
+        profiles = {}
+        runtime = runtime_path(root)
+        for key, value in template.profiles.items():
+            checked = value.checked()
+            if runtime != root / ".ctlrm" and checked.provider in {"codex", "claude"}:
+                checked = checked.model_copy(
+                    update={"arguments": [*checked.arguments, "--add-dir", str(runtime.parent)]}
+                )
+            profiles[key] = checked.model_dump()
         snapshot = {**template.model_dump(), "profiles": profiles}
-        if (root / ".ctlrm/area.yaml").exists():
+        if (runtime_path(root) / "area.yaml").exists():
             area = Area.load(root)
             definition = area.data.get("definition") or {}
             expected = {"template": snapshot, "bindings": bindings}
@@ -63,6 +73,7 @@ class WorkflowService(SessionService):
                 not request_id
                 or definition.get("submission_id") != request_id
                 or any(normalized.get(k) != v for k, v in expected.items())
+                or (job_id is not None and definition.get("task", {}).get("id") != job_id)
                 or definition.get("task", {}).get("title") != title
                 or definition.get("task", {}).get("instructions") != instructions
             ):
@@ -70,7 +81,7 @@ class WorkflowService(SessionService):
             area.validate()
             area.ensure_room()
         else:
-            task = JobInput(id=identifier("job"), title=title, instructions=instructions)
+            task = JobInput(id=job_id or identifier("job"), title=title, instructions=instructions)
             submission_id = request_id or identifier("request")
             definition = {
                 "template": snapshot,
@@ -347,7 +358,7 @@ class WorkflowEngine(SessionEngine):
                 arguments += f" --input-artifact {execution['input']['artifact']}"
             body = (
                 f"Area: {self.area.data['id']}\nRun: {run['id']}\nWork ID: {execution['id']}\n"
-                f"Role instructions: {role['instructions']}\nJob goal: .ctlrm/task.md\n"
+                f"Role instructions: {role['instructions']}\nJob goal: {runtime_reference(self.area.root)}/task.md\n"
                 f"Task: {execution['step']}\nTask instructions: {self.template.tasks[execution['step']].instructions}\n"
                 f"Input: {json.dumps(execution['input'])}\n"
                 f"Input verification policy: all outcomes={self.template.steps[execution['step']].verify_input}; named outcomes={self.template.steps[execution['step']].verified_outcomes}\n"

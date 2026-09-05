@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 
 from ctlrm.managed.storage import Journal, identifier, now, publish, read_record
+from ctlrm.runtime.location import runtime_path
 from ctlrm.runtime.manifest import RoleAssignment, RoomManifest
 from ctlrm.runtime.room import RoomRuntime
 
@@ -33,10 +34,12 @@ def worktree(path: Path) -> tuple[Path, str]:
     return root, branch
 
 
-def ignore_runtime(root: Path) -> None:
+def ignore_runtime(root: Path, pattern: str = "/.ctlrm/") -> None:
     """Preserve the Git-resolved local exclude file and idempotently add the runtime."""
     result = subprocess.run(
-        ["git", "-C", str(root), "check-ignore", "-q", ".ctlrm/"], capture_output=True, timeout=15
+        ["git", "-C", str(root), "check-ignore", "-q", pattern.lstrip("/")],
+        capture_output=True,
+        timeout=15,
     )
     if result.returncode == 0:
         return
@@ -46,8 +49,8 @@ def ignore_runtime(root: Path) -> None:
         fcntl.flock(stream, fcntl.LOCK_EX)
         stream.seek(0)
         content = stream.read()
-        if "/.ctlrm/" not in content.splitlines():
-            stream.write(("\n" if content and not content.endswith("\n") else "") + "/.ctlrm/\n")
+        if pattern not in content.splitlines():
+            stream.write(("\n" if content and not content.endswith("\n") else "") + pattern + "\n")
             stream.flush()
             os.fsync(stream.fileno())
 
@@ -68,7 +71,7 @@ class Area:
         root = Path(git(path, "rev-parse", "--show-toplevel")).resolve()
         if (root / ".ctlrm").is_symlink():
             raise ValueError("coordination runtime must not be a symlink")
-        data = read_record(root / ".ctlrm/area.yaml")
+        data = read_record(runtime_path(root) / "area.yaml")
         if data.get("schema_version") != 1:
             raise ValueError("unsupported coordination area schema")
         return cls(root, data)
@@ -105,7 +108,7 @@ class Area:
             "capabilities": ["coordinate"],
             "restart_command": None,
         }
-        area_path = root / ".ctlrm/area.yaml"
+        area_path = runtime_path(root) / "area.yaml"
 
         def existing() -> "Area | None":
             """Retry compatible initialization without acquiring the daemon's lifetime lock."""
@@ -133,7 +136,7 @@ class Area:
             reused = existing()
             if reused is not None:
                 return reused
-            children = [p for p in (root / ".ctlrm").iterdir() if p.name != "supervisor"]
+            children = [p for p in runtime_path(root).iterdir() if p.name != "supervisor"]
             if children and not adopt:
                 raise ValueError("populated legacy area: use a fresh worktree or explicit --adopt")
             room_id = identifier("room")

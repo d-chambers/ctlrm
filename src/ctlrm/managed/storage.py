@@ -12,6 +12,7 @@ from typing import Iterator
 from uuid import uuid4
 
 from ctlrm.runtime.filesystem import mkdir_shared
+from ctlrm.runtime.location import runtime_path
 from ctlrm.runtime.paths import validate_path_component
 from ctlrm.runtime.room import _write_exclusive_atomic
 
@@ -129,9 +130,9 @@ def patched(before: object, delta: dict) -> object:
 class Journal:
     """Store client submissions and supervisor-committed snapshots separately."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, storage_root: Path | None = None) -> None:
         """Locate an area's journal without creating it."""
-        self.root = root / ".ctlrm"
+        self.root = storage_root if storage_root is not None else runtime_path(root)
         self.locked = False
 
     @contextmanager

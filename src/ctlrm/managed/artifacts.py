@@ -59,7 +59,12 @@ def fingerprint(root: Path) -> dict:
             for item in _files(root, "--cached", "--others", "--exclude-standard")
         )
     )
-    names = [name for name in names if name != ".ctlrm" and not name.startswith(".ctlrm/")]
+    names = [
+        name
+        for name in names
+        if name not in {".ctlrm", ".scratch/ctlrm"}
+        and not name.startswith((".ctlrm/", ".scratch/ctlrm/"))
+    ]
     if len(names) > 10000:
         raise ValueError("artifact exceeds 10000 files")
     files, total = {}, 0

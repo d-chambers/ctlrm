@@ -1,5 +1,6 @@
 """Typer commands for managed standalone sessions and their supervisor."""
 
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -33,7 +34,8 @@ def _send(ctx: typer.Context, kind: str, payload: dict, request_id: str | None) 
     """Publish an operation and ensure execution continues in the background."""
     area = _area(ctx)
     result = SessionService(area).request(kind, payload, request_id)
-    supervisor.start(area)
+    if not os.environ.get("CTLRM_SESSION"):
+        supervisor.start(area)
     SessionService(area).await_result(result)
     typer.echo(f"accepted {result}")
 

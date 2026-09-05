@@ -2,7 +2,7 @@
 
 Date: 2026-09-05
 
-Status: Implementation in progress. Milestone 0 has measured native recovery evidence in `docs/provider-session-recovery.md`. Remaining schemas and operations describe intended behavior, not features already available in the CLI.
+Status: Backend milestones 0–4 are implemented and reviewed, with native and mixed-provider evidence in `docs/provider-session-recovery.md`. Milestone 5 (TUI) is deferred at the user’s request pending a separate design discussion.
 
 ## Product contract
 
@@ -128,15 +128,18 @@ roles:
 steps:
   implement:
     role: implementer
+    verify_input: false
     transitions:
       completed: review
   review:
     role: reviewer
+    verify_input: true
     transitions:
       approved: approve
       changes_requested: implement
   approve:
     role: owner
+    verify_input: true
     transitions:
       approved: terminal:completed
       rejected: terminal:rejected
@@ -197,15 +200,17 @@ Acceptance: simulated agents traverse a review loop and human approval. A one-ag
 
 ### 4. Connect automatic launch, handoff, and recovery
 
-- [ ] Validate all profiles up front, then lazily launch roles through the existing session service and require readiness before dispatch.
-- [ ] Connect outcome validation, artifact attribution, committed transitions, mailbox publication, acknowledgments, and next-agent wake-ups.
-- [ ] Implement retry/replacement/cancellation decisions, stale-generation rejection, and bounded workflow loops.
-- [ ] Prove a second provider's native recovery contract and run a mixed-provider workflow.
-- [ ] Inject crashes at launch, event commit, delivery, wake-up, and acknowledgment boundaries; verify reconciliation or an explicit uncertainty block.
+- [x] Validate all profiles up front, then lazily launch roles through the existing session service and require readiness before dispatch.
+- [x] Connect outcome validation, artifact attribution, committed transitions, mailbox publication, acknowledgments, and next-agent wake-ups.
+- [x] Implement retry/replacement/cancellation decisions, stale-generation rejection, and bounded workflow loops.
+- [x] Prove a second provider's native recovery contract and run a mixed-provider workflow.
+- [x] Inject crashes at launch, event commit, delivery, wake-up, and acknowledgment boundaries; verify reconciliation or an explicit uncertainty block.
 
 Acceptance: task submission drives implement/review/approval without manual launching or routing, and recovery never silently repeats ambiguous work or accepts a handoff twice.
 
 ### 5. Present the working runtime
+
+Deferred by the user on 2026-09-05 for a separate TUI design discussion. CLI/runtime documentation and the reusable example are available; no TUI implementation changes were made in these backend milestones.
 
 - [ ] Connect the TUI to worktree/branch selection, standalone sessions, task submission, role/session display, pane output, human responses, and recovery actions.
 - [ ] Show task progress, active step, process health, and waiting/recovery reasons separately.
@@ -217,14 +222,16 @@ Acceptance: CLI and TUI use the same services; reopening the TUI reconstructs cu
 
 Use fake processes for deterministic lifecycle/failure testing and isolated real tmux servers through libtmux for adapter tests. Native-provider acceptance uses disposable worktrees, bounded prompts, configured credentials, and recorded provider versions/session identities. Fake tests do not establish real provider resume support. Coverage percentage is informational for this milestone; required boundary/recovery tests and passing checks are the gates, not an arbitrary global percentage over legacy code.
 
-- [ ] Run `uv run pytest --cov ctlrm --cov-report term-missing`, `uv run ruff check .`, `uv run ruff format --check .`, and `uvx prek run --all-files`.
-- [ ] Test duplicate IDs with identical/conflicting payloads, unknown outcomes, malformed files, template snapshot independence, one-agent workflows, and loop limits.
-- [ ] Test missing executables/environment, bootstrap timeout, live-shell/dead-agent detection, unsupported resume, idempotent identity registration, and replacement generations.
-- [ ] Test crashes before/after launch, accepted outcomes, publication, wake-up, and acknowledgment; test stale completions and cancellation races.
-- [ ] Test worktree subdirectory resolution, main/linked worktrees, `.git` files, expected branch enforcement, removed/moved roots, and independent areas sharing a Git common directory.
-- [ ] Test standalone launch without a graph, prompt acknowledgments, direct-terminal limitations, explicit stop, and uncertain prompt recovery.
-- [ ] Build/install a wheel outside the source tree, check supported Python versions, and document supported libtmux/tmux/storage versions.
-- [ ] Self-review each substantive milestone, obtain the required counterpart CLI review under untracked `.scratch/`, address actionable findings, and rerun relevant checks. Answer every unresolved review comment if an implementation PR exists.
+- [x] Run `uv run pytest --cov ctlrm --cov-report term-missing`, `uv run ruff check .`, `uv run ruff format --check .`, and `uvx prek run --all-files`.
+- [x] Test duplicate IDs with identical/conflicting payloads, unknown outcomes, malformed files, template snapshot independence, one-agent workflows, and loop limits.
+- [x] Test missing executables/environment, bootstrap timeout, live-shell/dead-agent detection, unsupported resume, idempotent identity registration, and replacement generations.
+- [x] Test crashes before/after launch, accepted outcomes, publication, wake-up, and acknowledgment; test stale completions and cancellation races.
+- [x] Test worktree subdirectory resolution, main/linked worktrees, `.git` files, expected branch enforcement, removed/moved roots, and independent areas sharing a Git common directory.
+- [x] Test standalone launch without a graph, prompt acknowledgments, direct-terminal limitations, explicit stop, and uncertain prompt recovery.
+- [x] Build/install a wheel outside the source tree, check supported Python versions, and document supported libtmux/tmux/storage versions.
+- [x] Self-review each substantive milestone, obtain the required counterpart CLI review under untracked `.scratch/`, address actionable findings, and rerun relevant checks. Answer every unresolved review comment if an implementation PR exists.
+
+Backend acceptance has passed for standalone Claude and Codex recovery, mixed-provider review loops, a controller exercising the human response API, supervisor handoff recovery, and worktree isolation. GUI closure/reopening demonstrations remain deferred with milestone 5; detached CLI/supervisor lifetime has been verified. The originally planned full product demonstration remains below for that future milestone.
 
 Final demonstrations: first launch a single agent in one worktree, obtain restart instructions, close the UI, recover its native conversation after death, and explicitly stop it. In another worktree, submit a task using the saved implement-review template, let control room launch the required roles, interrupt/resume the implementer, deliver the accepted implementation once, handle requested changes and human approval, and finish with attributable outputs. Restart the supervisor at a handoff boundary. Reuse the unchanged template in a third worktree and verify complete runtime isolation. All tmux management goes through libtmux.
 

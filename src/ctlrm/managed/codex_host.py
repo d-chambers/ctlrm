@@ -1,0 +1,129 @@
+"""A terminal-owned Codex exec loop with native resume and durable input hints."""
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+from uuid import UUID
+
+from ctlrm.managed.sessions import pending_message
+from ctlrm.managed.storage import Journal, read_record
+
+
+def turn(executable: str, arguments: list[str], native_id: str | None, prompt: str) -> str:
+    """Run one native turn; no shared TUI daemon or terminal approval dialog is involved."""
+    argv = [executable, "exec", *arguments, "--json"]
+    if native_id:
+        argv.extend(["resume", native_id])
+    argv.append(prompt)
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, text=True)
+    assert process.stdout is not None
+    try:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if event.get("type") == "thread.started":
+                observed = str(UUID(event["thread_id"]))
+                if native_id and native_id != observed:
+                    raise ValueError("Codex resumed a different native thread")
+                native_id = observed
+        if process.wait() != 0:
+            raise RuntimeError("Codex turn failed; inspect the terminal output")
+        if not native_id:
+            raise ValueError("Codex did not report its native thread ID")
+        return native_id
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+
+
+class InputLoop:
+    """Retry native hints until committed acknowledgment, with bounded wake frequency."""
+
+    def __init__(
+        self,
+        root: Path,
+        session_id: str,
+        generation: int,
+        token: str,
+        config: dict,
+        native_id: str,
+        clock=time.monotonic,
+    ) -> None:
+        """Bind the input reader to one owned generation and its native conversation."""
+        self.journal = Journal(root)
+        self.session_id = session_id
+        self.generation = generation
+        self.token = token
+        self.config = config
+        self.native_id = native_id
+        self.clock = clock
+        self.attempted = {"bootstrap": self.clock()}
+
+    def poll(self) -> bool:
+        """Deliver only the currently pending logical hint; rejected acks remain retryable."""
+        state = self.journal.replay()[0]
+        if state["paused"] or state["shutdown"]:
+            return False
+        session = state["sessions"][self.session_id]
+        if session["generation"] != self.generation:
+            raise ValueError("native runner generation is no longer current")
+        outbound = pending_message(session)
+        if not session["ready"] and session["status"] in {"starting", "spawning"}:
+            message_id = "bootstrap"
+            reference = self.config["bootstrap"]
+        else:
+            if not outbound:
+                return False
+            message_id = outbound["id"]
+            path = (
+                self.journal.root
+                / "sessions"
+                / self.session_id
+                / f"input-{self.generation}"
+                / f"{message_id}.json"
+            )
+            if not path.exists():
+                return False
+            record = read_record(path)
+            if record.get("token") != self.token or not isinstance(record.get("reference"), str):
+                raise ValueError("invalid native input hint")
+            reference = record["reference"]
+        if self.clock() - self.attempted.get(message_id, float("-inf")) < 15:
+            return False
+        self.native_id = turn(
+            self.config["executable"], self.config["arguments"], self.native_id, reference
+        )
+        self.attempted[message_id] = self.clock()
+        return True
+
+
+def main() -> None:
+    """Run bootstrap then use committed acknowledgment to drive native input delivery."""
+    config = json.loads(sys.argv[1])
+    root = Path(os.environ["CTLRM_ROOT"])
+    native_id = turn(
+        config["executable"], config["arguments"], config["native_id"], config["bootstrap"]
+    )
+    inputs = InputLoop(
+        root,
+        os.environ["CTLRM_SESSION"],
+        int(os.environ["CTLRM_GENERATION"]),
+        os.environ["CTLRM_LAUNCH_TOKEN"],
+        config,
+        native_id,
+    )
+    print("Codex is waiting for a durable mailbox assignment.", flush=True)
+    while True:
+        inputs.poll()
+        time.sleep(0.5)
+
+
+if __name__ == "__main__":
+    main()

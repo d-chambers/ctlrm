@@ -1,5 +1,6 @@
 """Versioned reusable workflow definitions and task/execution records."""
 
+import copy
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -36,7 +37,23 @@ class WorkflowStep(Record):
     """A role visit with explicitly named business outcomes."""
 
     role: str
+    verify_input: bool
+    verified_outcomes: list[str] = Field(default_factory=list, max_length=32)
     transitions: dict[str, str] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def validate_outcome_policy(self) -> "WorkflowStep":
+        """Named verification outcomes must be unique declared transitions."""
+        if (
+            len(set(self.verified_outcomes)) != len(self.verified_outcomes)
+            or set(self.verified_outcomes) - self.transitions.keys()
+        ):
+            raise ValueError("verified_outcomes must name unique declared outcomes")
+        return self
+
+    def checks_input(self, outcome: str) -> bool:
+        """Select all-outcome or explicitly named input verification."""
+        return self.verify_input or outcome in self.verified_outcomes
 
 
 class ExecutionLimits(Record):
@@ -65,6 +82,18 @@ class WorkflowTemplate(Record):
             return cls.model_validate(load_yaml(text))
         except RecursionError as error:
             raise ValueError("template nesting is too deep") from error
+
+    @classmethod
+    def from_snapshot(cls, value: dict) -> "WorkflowTemplate":
+        """Read earlier immutable snapshots using their original approval-name policy."""
+        value = copy.deepcopy(value)
+        for step in value.get("steps", {}).values():
+            if "verify_input" not in step:
+                step["verify_input"] = False
+                step["verified_outcomes"] = (
+                    ["approved"] if "approved" in step.get("transitions", {}) else []
+                )
+        return cls.model_validate(value)
 
     @model_validator(mode="after")
     def validate_graph(self) -> "WorkflowTemplate":

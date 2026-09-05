@@ -7,7 +7,7 @@ Date: 2026-09-05
 | Provider | Installed version | Native session identity | Resume command | Evidence |
 | --- | --- | --- | --- | --- |
 | Claude Code | 2.1.261 | Controller allocates a UUID through `--session-id`; agent acknowledges it in its recovery response | `claude --resume <session-id>` with the same transport options | Passed in streamed and interactive terminal modes: native ID and conversation token retained after SIGKILL |
-| Codex | 0.153.4 | To be verified in the second-provider milestone | Not yet verified | No recovery claim yet |
+| Codex | 0.153.4 | Agent acknowledges its actual `CODEX_THREAD_ID`; JSONL `thread.started` independently verifies it | Terminal-owned `codex exec --json resume <session-id>` with the same profile | [Managed recovery passed](evidence/managed-codex-recovery-2026-09-05.json), including an interrupted workflow implementer |
 
 Terminal management used libtmux 0.62.0 and tmux 3.4 on Linux. The probe ran in a disposable linked Git worktree on its own branch and isolated tmux socket with `/dev/null` as the tmux configuration. It did not access application source or credentials through agent tools.
 
@@ -74,3 +74,7 @@ The successful interactive response is retained in [the evidence excerpt](eviden
 The [streamed evidence excerpt](evidence/provider-recovery-streamed-2026-09-05.json) retains the independent streamed result. Both evidence files include launch/resume vectors, recorded timestamps, and the intentionally restricted test profile.
 
 The evidence JSON files are versioned experiment records, not templates for the future runtime recovery schema. They retain vectors, responses, IDs, and token assertions. Trust-dialog handling, renderer fallback, and the sole-child process check are recorded in the procedure prose; full terminal/process logs remain temporary.
+
+## Managed workflow acceptance
+
+[The mixed-provider experiment](evidence/mixed-workflow-2026-09-05.json) used a Codex implementer and Claude reviewer. The controller interrupted the acknowledged implementer after it wrote the first output version. Control room resumed the same native thread and retained the execution ID, then accepted its reconciled handoff. The experiment killed the supervisor with that report pending, restarted it, traversed a changes-requested loop, and verified a second output version. An acceptance controller exercised the human join/acknowledge/report API to finish the run; this was an integration test of that path, not authenticated business approval by a person. Five visits produced five distinct logical assignment IDs. All agent sessions and both supervisors were explicitly stopped. The same template/profile snapshot initialized another worktree with an independent area ID and was canceled before agent launch.

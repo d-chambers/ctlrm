@@ -76,6 +76,7 @@ def acknowledge(
     participant: Annotated[str, typer.Option()],
     session_id: str | None = None,
     generation: int | None = None,
+    input_artifact: str | None = None,
     request_id: str | None = None,
 ) -> None:
     """Acknowledge an assignment before acting; required for agents and humans."""
@@ -89,6 +90,7 @@ def acknowledge(
                 "participant": participant,
                 "session_id": session_id,
                 "generation": generation,
+                "input_artifact": input_artifact,
             },
             request_id,
         )
@@ -105,6 +107,7 @@ def report(
     summary: Annotated[str, typer.Option()],
     session_id: str | None = None,
     generation: int | None = None,
+    input_artifact: str | None = None,
     request_id: str | None = None,
 ) -> None:
     """Report an allowed outcome; human responses follow the same validation path."""
@@ -118,9 +121,31 @@ def report(
                 "participant": participant,
                 "session_id": session_id,
                 "generation": generation,
+                "input_artifact": input_artifact,
                 "outcome": outcome,
                 "summary": summary,
             },
             request_id,
+        )
+    )
+
+
+@workflow_app.command("cancel")
+def cancel(ctx: typer.Context, request_id: str | None = None) -> None:
+    """Cancel the task and stop its owned agent sessions."""
+    _run(lambda: _send(ctx, "workflow-cancel", {}, request_id))
+
+
+@workflow_app.command("retry")
+def retry(
+    ctx: typer.Context,
+    execution_id: Annotated[str, typer.Option()],
+    reason: Annotated[str, typer.Option()],
+    request_id: str | None = None,
+) -> None:
+    """Abandon a visit and refresh its inputs after explicitly stopping its agent."""
+    _run(
+        lambda: _send(
+            ctx, "workflow-retry", {"execution_id": execution_id, "reason": reason}, request_id
         )
     )

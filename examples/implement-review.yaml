@@ -1,0 +1,42 @@
+schema_version: 1
+name: implement-review
+entry: implement
+limits:
+  max_step_executions: 12
+profiles:
+  coding-agent:
+    provider: codex
+    executable: codex
+    context: ~/.codex
+    input_mode: native
+    arguments: [--sandbox, workspace-write]
+roles:
+  implementer:
+    kind: agent
+    profile: coding-agent
+    instructions: Implement the task, run applicable checks, and report the result. Address requested changes on later visits.
+  reviewer:
+    kind: agent
+    profile: coding-agent
+    instructions: Review the assigned artifact and checks. Do not edit project files. Report approved or changes_requested with concrete findings.
+  owner:
+    kind: human
+    instructions: Inspect the reviewed artifact and accept or reject the result.
+steps:
+  implement:
+    role: implementer
+    verify_input: false
+    transitions:
+      completed: review
+  review:
+    role: reviewer
+    verify_input: true
+    transitions:
+      approved: approve
+      changes_requested: implement
+  approve:
+    role: owner
+    verify_input: true
+    transitions:
+      approved: terminal:completed
+      rejected: terminal:rejected

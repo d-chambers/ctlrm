@@ -70,7 +70,7 @@ class RoomManifest(BaseModel):
         """Reject an empty or whitespace-only prompt."""
         if not value.strip():
             raise ValueError("room prompt cannot be blank")
-        return value.strip()
+        return value.strip("\n")
 
     @model_validator(mode="after")
     def _validate_assignments(self) -> RoomManifest:
@@ -121,4 +121,5 @@ class RoomManifest(BaseModel):
         """Serialize the room manifest as Markdown with YAML front matter."""
         data = self.model_dump(mode="json", exclude={"prompt"})
         front_matter = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
-        return f"---\n{front_matter}\n---\n{self.prompt.rstrip()}\n"
+        body = self.prompt.strip("\n")
+        return f"---\n{front_matter}\n---\n{body}\n"

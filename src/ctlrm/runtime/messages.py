@@ -66,4 +66,5 @@ class MailboxMessage(BaseModel):
         """Serialize the message as Markdown with YAML front matter."""
         data = self.model_dump(mode="json", by_alias=True, exclude={"body"}, exclude_none=True)
         front_matter = yaml.safe_dump(data, sort_keys=False, allow_unicode=True).rstrip()
-        return f"---\n{front_matter}\n---\n{self.body.rstrip()}\n"
+        body = self.body.strip("\n")
+        return f"---\n{front_matter}\n---\n{body}\n"

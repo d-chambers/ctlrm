@@ -22,7 +22,7 @@ def parse_markdown_document(text: str) -> tuple[dict[str, object], str]:
         raise ValueError("YAML front matter must be a mapping")
     if not all(isinstance(key, str) for key in metadata):
         raise ValueError("YAML front matter keys must be strings")
-    return metadata, body.strip()
+    return metadata, body.strip("\n")
 
 
 def normalize_timestamp(value: object) -> str:

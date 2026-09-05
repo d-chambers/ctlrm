@@ -571,3 +571,22 @@ class TestRoomDirectoryDurability:
             inbox = runtime.root / "participants/worker/inbox"
             chain = [tmp_path, runtime.root, inbox.parent.parent, inbox.parent, inbox]
             assert {path.stat().st_ino for path in chain} <= synced
+
+
+class TestMarkdownWhitespace:
+    """Round trips preserve indentation and Markdown hard line breaks."""
+
+    @pytest.mark.parametrize("body", ["    first()\n    second()", "line  ", "\tcode()"])
+    def test_message_formatting(self, tmp_path: Path, body: str) -> None:
+        """Mailbox delivery must not change meaningful spaces or tabs."""
+        runtime = RoomRuntime(tmp_path)
+        initialize(runtime)
+        join_reviewer(runtime)
+        runtime.send_message(message(body=body))
+        assert runtime.read_inbox("reviewer")[0].body == body
+
+    def test_prompt_formatting(self) -> None:
+        """Prompt normalization removes newlines while retaining indentation."""
+        prompt = "    first()\n    second()  "
+        manifest = room(prompt=prompt)
+        assert RoomManifest.parse(manifest.to_markdown()).prompt == prompt

@@ -19,8 +19,17 @@ class ProjectRuntime:
         """Resolve storage only for operations that need a local runtime."""
         return runtime_path(self.project_root)
 
+    def ensure_writable(self) -> None:
+        """Reject public runtime mutations after a managed job has retired."""
+        if (self.root / "area.yaml").exists():
+            from ctlrm.managed.storage import Journal
+
+            if Journal(self.project_root).replay()[0].get("retired"):
+                raise ValueError("job is retired; its runtime is read-only")
+
     def init_project(self) -> None:
         """Create project runtime directories."""
+        self.ensure_writable()
         if not self.project_root.is_dir():
             raise NotADirectoryError(f"project root must already exist: {self.project_root}")
         mkdir_shared(self.root)

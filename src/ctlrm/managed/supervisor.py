@@ -61,6 +61,8 @@ def start(area: Area, interval: float = 1) -> None:
     """Start a detached supervisor once and wait briefly for lock acquisition."""
     if not 0.1 <= interval <= 60:
         raise ValueError("supervisor interval must be between 0.1 and 60 seconds")
+    if area.journal.replay()[0].get("retired"):
+        raise ValueError("job is retired; its runtime is read-only")
     if running(area):
         return
     mkdir_shared(area.room.root / "supervisor/logs")
@@ -86,6 +88,8 @@ def start(area: Area, interval: float = 1) -> None:
         if running(area):
             return
         if process.poll() is not None:
+            if process.returncode == 0 and area.journal.replay()[0].get("retired"):
+                return
             raise RuntimeError(f"supervisor failed to start; inspect {path}")
         time.sleep(0.05)
     raise RuntimeError(f"supervisor has not acquired its lock; inspect {path}")
@@ -96,6 +100,8 @@ def serve(area: Area, interval: float = 1) -> None:
     if not 0.1 <= interval <= 60:
         raise ValueError("supervisor interval must be between 0.1 and 60 seconds")
     with _writer(area):
+        if area.journal.replay()[0].get("retired"):
+            raise ValueError("job is retired; its runtime is read-only")
         area.ensure_room()
         from ctlrm.managed.workflows import WorkflowEngine
 

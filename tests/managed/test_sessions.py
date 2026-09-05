@@ -357,3 +357,23 @@ class TestNativeHints:
         paths = list((area.room.root / "sessions" / current["id"] / "input-1").glob("*.json"))
         assert len(paths) == 1 and not terminal.wakes
         assert session(restarted)["work"]["id"] == original
+
+
+class TestMailboxRedelivery:
+    """Repeated terminal hints read the immutable mailbox without replaying history."""
+
+    def test_existing_delivery_skips_replay(self, managed, monkeypatch) -> None:
+        """Redelivery must not add a full journal replay per participant per tick."""
+        from ctlrm.managed.sessions import mailbox
+        from ctlrm.managed.storage import Journal
+
+        area, engine, _, _ = managed
+        session = next(iter(engine.state["sessions"].values()))
+        item = session["spec"]["bootstrap"]
+
+        def unexpected_replay(self):
+            """Fail if an already-published message triggers another journal read."""
+            raise AssertionError("redelivery replayed history")
+
+        monkeypatch.setattr(Journal, "replay", unexpected_replay)
+        mailbox(area, session["participant"], item)

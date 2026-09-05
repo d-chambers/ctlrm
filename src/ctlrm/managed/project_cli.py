@@ -140,3 +140,23 @@ def find_job(
             encoded({"jobs": ProjectStore().find_pr(pr, repository=repository, project_id=project)})
         )
     )
+
+
+@project_app.command("complete")
+def complete_project(project: Annotated[str, typer.Option()]) -> None:
+    """Stop completed job sessions, retain code, and close the project."""
+    _run(lambda: typer.echo(encoded(ProjectStore().complete(project))))
+
+
+@project_app.command("archive")
+def archive_project(project: Annotated[str, typer.Option()], output: Path | None = None) -> None:
+    """Create and verify a completed project's ZIP without deleting its worktrees."""
+    _run(lambda: typer.echo(encoded(ProjectStore().archive(project, output))))
+
+
+@project_app.command("verify-archive")
+def verify_project_archive(file: Annotated[Path, typer.Option()]) -> None:
+    """Verify archive contents without extracting or restarting sessions."""
+    from ctlrm.managed.archive import verify_archive
+
+    _run(lambda: typer.echo(encoded(verify_archive(file))))

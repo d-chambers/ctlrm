@@ -68,6 +68,7 @@ class RoomRuntime(ProjectRuntime):
 
     def init_project(self) -> None:
         """Create the minimal room directories for a shared Unix group."""
+        self.ensure_writable()
         if not self.project_root.is_dir():
             raise NotADirectoryError(f"project root must already exist: {self.project_root}")
         if self.root != self.project_root / ".ctlrm" and not (self.root / "area.yaml").exists():

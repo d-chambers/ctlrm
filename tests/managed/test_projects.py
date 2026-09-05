@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 from ctlrm.__main__ import app
 from ctlrm.managed.area import Area
 from ctlrm.managed.projects import ProjectStore
-from ctlrm.managed.workflows import WorkflowEngine
+from ctlrm.managed.workflows import WorkflowEngine, WorkflowService
 from ctlrm.runtime.workflows import WorkflowTemplate
 from conftest import FakeTerminal
 
@@ -236,3 +236,54 @@ class TestCentralProvider:
         with pytest.raises(ValueError, match="scratch link"):
             Area.load(client.area.root)
         assert store.job_status("auth", "a")["status"] == "starting"
+
+
+class TestBindingRecovery:
+    """Damaged bindings and failed provisioning never create another runtime."""
+
+    def test_missing_locator(self, store, human_template) -> None:
+        """A remaining central link prevents local fallback and start repairs the binding."""
+        client = self.started(store, human_template)
+        original = client.area.data["id"]
+        (client.area.root / ".ctlrm/location.json").unlink()
+        with pytest.raises(ValueError, match="locator is missing"):
+            WorkflowService.submit(client.area.root, human_template, "Other", "Other")
+        repaired, _ = store.start_job("auth", "a")
+        assert repaired.area.data["id"] == original
+
+    @staticmethod
+    def started(store, template):
+        """Create one centrally bound human job."""
+        store.add_job("auth", "A", "x", template, job_id="a")
+        return store.start_job("auth", "a")[0]
+
+    def test_cli_with_broken_link(self, store, human_template, monkeypatch) -> None:
+        """Central commands still work from a worktree needing binding repair."""
+        client = self.started(store, human_template)
+        monkeypatch.setenv("CTLRM_DATA_HOME", str(store.root))
+        monkeypatch.chdir(client.area.root)
+        (client.area.root / ".scratch/ctlrm").unlink()
+        result = CliRunner().invoke(app, ["job", "status", "--project", "auth", "--job", "a"])
+        assert result.exit_code == 0, result.output
+        store.start_job("auth", "a")
+        assert Area.load(client.area.root).data["id"] == client.area.data["id"]
+
+    def test_branch_collision(self, store, human_template) -> None:
+        """A rejected branch choice does not bind the planned job permanently."""
+        store.add_job("auth", "A", "x", human_template, job_id="a")
+        with pytest.raises(ValueError, match="branch already exists"):
+            store.start_job("auth", "a", branch="main")
+        assert store.job_status("auth", "a")["status"] == "planned"
+        client, _ = store.start_job("auth", "a", branch="available")
+        assert client.area.data["branch"] == "refs/heads/available"
+
+    def test_legacy_scratch_remains_versioned(self, repository) -> None:
+        """Only a verified central link is excluded from artifact capture."""
+        from ctlrm.managed.artifacts import fingerprint
+
+        scratch = repository / ".scratch/ctlrm/review.txt"
+        scratch.parent.mkdir(parents=True)
+        scratch.write_text("first")
+        before = fingerprint(repository)
+        scratch.write_text("second")
+        assert fingerprint(repository) != before

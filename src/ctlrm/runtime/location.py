@@ -10,6 +10,8 @@ def runtime_path(root: Path) -> Path:
         raise ValueError("coordination runtime must not be a symlink")
     locator = local / "location.json"
     if not locator.exists():
+        if (root / ".scratch/ctlrm").is_symlink():
+            raise ValueError("central runtime locator is missing; retry job start to repair")
         return local
     if locator.is_symlink() or locator.stat().st_size > 8192:
         raise ValueError("invalid central runtime locator")
@@ -18,6 +20,8 @@ def runtime_path(root: Path) -> Path:
     record = read_record(locator)
     if record.get("schema_version") != 1 or record.get("worktree") != str(root.resolve()):
         raise ValueError("central runtime locator does not match this worktree")
+    if not isinstance(record.get("job_directory"), str):
+        raise ValueError("invalid central job directory")
     job = Path(record["job_directory"])
     if not job.is_absolute() or job.resolve() != job or not (job / "job.json").is_file():
         raise ValueError("central job directory is missing or moved")

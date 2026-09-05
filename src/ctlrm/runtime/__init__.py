@@ -13,7 +13,11 @@ class ProjectRuntime:
     def __init__(self, project_root: Path) -> None:
         """Initialize paths for a project runtime."""
         self.project_root = project_root
-        self.root = runtime_path(project_root)
+
+    @property
+    def root(self) -> Path:
+        """Resolve storage only for operations that need a local runtime."""
+        return runtime_path(self.project_root)
 
     def init_project(self) -> None:
         """Create project runtime directories."""

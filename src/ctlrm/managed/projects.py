@@ -210,21 +210,46 @@ class ProjectStore:
                 elif target.exists():
                     raise ValueError("new job worktree path already exists")
                 git(Path(project.codebase), "check-ref-format", "--branch", launch["branch"])
+                if launch["create"] and git(
+                    Path(project.codebase),
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    f"refs/heads/{launch['branch']}",
+                ):
+                    raise ValueError(
+                        "new job branch already exists; choose another branch or bind its worktree"
+                    )
                 publish(launch_path, launch)
             target = Path(launch["root"])
             if not target.exists():
                 if not launch["create"]:
                     raise ValueError("bound worktree is missing")
                 target.parent.mkdir(parents=True, exist_ok=True)
-                git(
+                existing_branch = git(
                     Path(project.codebase),
-                    "worktree",
-                    "add",
-                    "-b",
-                    launch["branch"],
-                    str(target),
-                    launch["base_commit"],
+                    "for-each-ref",
+                    "--format=%(refname)",
+                    f"refs/heads/{launch['branch']}",
                 )
+                if existing_branch:
+                    if (
+                        git(Path(project.codebase), "rev-parse", f"refs/heads/{launch['branch']}")
+                        != launch["base_commit"]
+                    ):
+                        raise ValueError(
+                            "partially created job branch changed; restore its recorded base before retrying"
+                        )
+                    git(Path(project.codebase), "worktree", "add", str(target), launch["branch"])
+                else:
+                    git(
+                        Path(project.codebase),
+                        "worktree",
+                        "add",
+                        "-b",
+                        launch["branch"],
+                        str(target),
+                        launch["base_commit"],
+                    )
             resolved, ref = worktree(target)
             if (
                 ref != f"refs/heads/{launch['branch']}"

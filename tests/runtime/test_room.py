@@ -543,3 +543,31 @@ class TestConflictDiagnostics:
         with pytest.raises(FileExistsError) as caught:
             runtime.send_message(message())
         assert caught.value.filename == str(destination)
+
+
+class TestRoomDirectoryDurability:
+    """A successful room operation persists the directory chain to its records."""
+
+    def test_parent_directories_are_synced(self, tmp_path: Path, monkeypatch) -> None:
+        """Creation and retry both sync every mailbox ancestor within the project."""
+        import os
+        import stat
+
+        synced: set[int] = set()
+        original = os.fsync
+
+        def record(descriptor: int) -> None:
+            """Observe durability barriers while preserving real filesystem calls."""
+            info = os.fstat(descriptor)
+            if stat.S_ISDIR(info.st_mode):
+                synced.add(info.st_ino)
+            original(descriptor)
+
+        monkeypatch.setattr(os, "fsync", record)
+        runtime = RoomRuntime(tmp_path)
+        for _ in range(2):
+            synced.clear()
+            runtime.init_participant("worker")
+            inbox = runtime.root / "participants/worker/inbox"
+            chain = [tmp_path, runtime.root, inbox.parent.parent, inbox.parent, inbox]
+            assert {path.stat().st_ino for path in chain} <= synced

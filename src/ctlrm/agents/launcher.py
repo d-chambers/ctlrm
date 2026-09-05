@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from ctlrm.models import Participant, Project, Provider, TmuxTarget
-from ctlrm.registry import Registry
+from ctlrm.registry import Registry, RegistryDurabilityError
 from ctlrm.runtime import ProjectRuntime
 from ctlrm.communication.tmux import CommandRunner, TmuxCommand, TmuxTargetRef
 
@@ -87,6 +87,9 @@ class AgentLauncher:
         )
         try:
             self._save_registry(project, participant)
+        except RegistryDurabilityError:
+            project.participants.append(participant)
+            raise
         except Exception as error:
             target = TmuxTargetRef(session=session, window="agents", pane=pane)
             try:

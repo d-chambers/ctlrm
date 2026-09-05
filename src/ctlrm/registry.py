@@ -18,6 +18,10 @@ from ctlrm.models import Participant, Project
 _Result = TypeVar("_Result")
 
 
+class RegistryDurabilityError(OSError):
+    """The registry was replaced, but its crash durability could not be confirmed."""
+
+
 class Registry(BaseModel):
     """Collection of projects identified by their canonical worktree roots."""
 
@@ -54,11 +58,16 @@ class Registry(BaseModel):
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, path)
-            descriptor = os.open(path.parent, os.O_RDONLY)
             try:
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
+                descriptor = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            except OSError as error:
+                raise RegistryDurabilityError(
+                    f"registry updated at {path}, but durability could not be confirmed: {error}"
+                ) from error
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)

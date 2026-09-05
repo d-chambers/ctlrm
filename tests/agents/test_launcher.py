@@ -95,3 +95,35 @@ class TestLaunchRegistrationFailure:
         assert runner.commands[-1].args == ["kill-pane", "-t", "%43"]
         assert Registry.load(path).projects[0].participants[0].tmux_target.pane == "%42"
         assert stale.participants == []
+
+
+class TestLaunchDurabilityFailure:
+    """A published registration retains its live pane on durability failure."""
+
+    def test_post_replace_failure_retains_pane(self, tmp_path: Path, monkeypatch) -> None:
+        """A failed directory fsync must not undo an already visible registration."""
+        import os
+        import stat
+        import pytest
+        from ctlrm.registry import Registry, RegistryDurabilityError
+
+        original = os.fsync
+
+        def fail_directory(descriptor: int) -> None:
+            """Simulate storage refusing the directory durability barrier."""
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError("directory fsync failed")
+            original(descriptor)
+
+        monkeypatch.setattr(os, "fsync", fail_directory)
+        runner = RecordingRunner()
+        project = Project(id="p", name="P", root=tmp_path)
+        path = tmp_path / "registry.toml"
+        request = AgentLaunchRequest(
+            id="worker", name="Worker", role="work", provider=Provider.CLAUDE
+        )
+        with pytest.raises(RegistryDurabilityError, match="registry updated"):
+            AgentLauncher(runner, path).launch(project, request)
+        assert Registry.load(path).projects[0].participants == project.participants
+        assert len(project.participants) == 1
+        assert all(command.args[0] != "kill-pane" for command in runner.commands)

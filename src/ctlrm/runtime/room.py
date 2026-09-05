@@ -20,14 +20,23 @@ _UNSUPPORTED_LINK_ERRNOS = {errno.EPERM, errno.EXDEV, errno.EOPNOTSUPP}
 
 
 def _mkdir_shared(path: Path) -> None:
-    """Set group permissions only on a directory created by this process."""
+    """Create group-writable directories and persist their parent entries."""
+    if not path.parent.exists():
+        _mkdir_shared(path.parent)
     try:
-        path.mkdir(mode=_DIRECTORY_MODE, parents=True)
+        path.mkdir(mode=_DIRECTORY_MODE)
     except FileExistsError:
         if not path.is_dir():
             raise NotADirectoryError(str(path))
     else:
         path.chmod(_DIRECTORY_MODE)
+    # Also sync on retries after an earlier mkdir succeeded but its fsync failed.
+    for directory in (path, path.parent):
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def _write_exclusive_atomic(path: Path, text: str) -> None:

@@ -644,9 +644,86 @@ function taskDetails(pid, jid, name, executionId) {
       .map(([a, b]) => `<span>${esc(pretty(a))} → ${esc(pretty(b))}</span>`)
       .join(
         "",
-      )}</div>${t.specialist_tasks.length ? `<p class="small">Allowed specialists: ${esc(t.specialist_tasks.map(pretty).join(", "))}</p>` : ""}<p class="small muted">Input verification: ${t.verify_input ? "all outcomes" : esc(t.verified_outcomes.join(", ") || "not required")} · ${visits.length} execution${visits.length === 1 ? "" : "s"}</p>${e ? `<h3>Execution ${esc(e.id)}</h3><p>${pill(e.status, e.outcome || e.status)} ${e.id !== visits.at(-1).id ? "<strong>Prior execution</strong>" : ""}</p><div class="doc-content">${esc(e.summary || "No outcome report yet.")}</div><p class="mono small">Input: ${esc(e.input.artifact || "Initial job goal")}</p><div class="actions">${e.input.artifact ? `<button class="secondary" data-action="artifact" data-project="${esc(pid)}" data-job="${esc(jid)}" data-artifact="${esc(e.input.artifact)}">Input manifest</button>` : ""}${e.artifact ? `<button class="secondary" data-action="artifact" data-project="${esc(pid)}" data-job="${esc(jid)}" data-artifact="${esc(e.artifact)}">Output manifest</button>` : ""}</div>` : "<p>This task has not been visited.</p>"}${visits.length > 1 ? `<h3>Execution history</h3>${visits.map((x) => `<p><button class="secondary" data-action="execution" data-project="${esc(pid)}" data-job="${esc(jid)}" data-execution="${esc(x.id)}">${esc(x.id)} · ${esc(x.outcome || x.status)}</button></p>`).join("")}` : ""}${participant ? `<div class="actions" style="margin-top:20px"><button class="primary" data-action="participant" data-id="${esc(participant.id)}">${participant.kind === "human" ? "View human task" : "Open agent session"}</button></div>` : ""}`,
+      )}</div>${t.specialist_tasks.length ? `<p class="small">Allowed specialists: ${esc(t.specialist_tasks.map(pretty).join(", "))}</p>` : ""}<p class="small muted">Input verification: ${t.verify_input ? "all outcomes" : esc(t.verified_outcomes.join(", ") || "not required")} · ${visits.length} execution${visits.length === 1 ? "" : "s"}</p>${e ? `<h3>Execution ${esc(e.id)}</h3><p>${pill(e.status, e.outcome || e.status)} ${e.id !== visits.at(-1).id ? "<strong>Prior execution</strong>" : ""}</p><div class="doc-content">${esc(e.summary || "No outcome report yet.")}</div><p class="mono small">Input: ${esc(e.input.artifact || "Initial job goal")}</p><div class="actions">${e.input.artifact ? `<button class="secondary" data-action="artifact" data-project="${esc(pid)}" data-job="${esc(jid)}" data-artifact="${esc(e.input.artifact)}">Input manifest</button>` : ""}${e.artifact ? `<button class="secondary" data-action="artifact" data-project="${esc(pid)}" data-job="${esc(jid)}" data-artifact="${esc(e.artifact)}">Output manifest</button>` : ""}</div><h3>Artifacts</h3><div id="task-artifacts" aria-live="polite">Loading commits and sent messages…</div>` : "<p>This task has not been visited.</p>"}${visits.length > 1 ? `<h3>Execution history</h3>${visits.map((x) => `<p><button class="secondary" data-action="execution" data-project="${esc(pid)}" data-job="${esc(jid)}" data-execution="${esc(x.id)}">${esc(x.id)} · ${esc(x.outcome || x.status)}</button></p>`).join("")}` : ""}${participant ? `<div class="actions" style="margin-top:20px"><button class="primary" data-action="participant" data-id="${esc(participant.id)}">${participant.kind === "human" ? "View human task" : "Open agent session"}</button></div>` : ""}`,
   );
+  if (e) loadTaskArtifacts($("#task-artifacts"), pid, jid, e.id);
 }
+let editorRequest = 0;
+async function loadTaskArtifacts(container, pid, jid, executionId) {
+  if (!container) return;
+  const path = endpoint(pid, jid) + `/executions/${enc(executionId)}/artifacts`;
+  try {
+    const listing = await api(path);
+    if (!container.isConnected) return;
+    container.innerHTML = `<p class="small muted">Double-click an item to view its text, or use Enter or Open.</p>${listing.note ? `<p class="small">${esc(listing.note)}</p>` : ""}${[
+      "commit",
+      "message",
+    ]
+      .map((group) => {
+        const items = listing.items.filter((item) =>
+          group === "commit" ? item.kind === "commit" : item.kind !== "commit",
+        );
+        return `<h4>${group === "commit" ? "Commits" : "Sent messages"}</h4><div class="task-artifact-list">${items.length ? items.map((item) => `<div class="task-artifact-row" tabindex="0" role="group" aria-label="${esc(item.title)}" data-kind="${esc(item.kind)}" data-item="${esc(item.id)}"><div><strong>${esc(item.title)}</strong><div class="small muted">${esc(item.detail)}</div>${item.truncated ? '<span class="small">Large commit — preview truncated</span>' : ""}</div><button class="secondary open-task-artifact" aria-label="Open ${esc(item.title)}">Open</button></div>`).join("") : `<p class="small muted">${group === "commit" ? "No retained commits yet." : "No outgoing mailbox messages or outcome report yet."}</p>`}</div>`;
+      })
+      .join(
+        "",
+      )}<button class="secondary refresh-task-artifacts">Refresh artifacts</button>`;
+    container.onclick = (event) => {
+      if (event.target.closest(".refresh-task-artifacts")) {
+        loadTaskArtifacts(container, pid, jid, executionId);
+        return;
+      }
+      const row = event.target.closest(".task-artifact-row");
+      if (!row) return;
+      container
+        .querySelectorAll(".task-artifact-row")
+        .forEach((r) => r.classList.toggle("selected", r === row));
+      if (event.target.closest(".open-task-artifact"))
+        openTaskArtifact(path, row);
+    };
+    container.ondblclick = (event) => {
+      const row = event.target.closest(".task-artifact-row");
+      if (row && !event.target.closest("button")) openTaskArtifact(path, row);
+    };
+    container.onkeydown = (event) => {
+      const row = event.target.closest(".task-artifact-row");
+      if (event.key === "Enter" && row && !event.target.closest("button")) {
+        event.preventDefault();
+        openTaskArtifact(path, row);
+      }
+    };
+  } catch (error) {
+    if (container.isConnected) container.textContent = error.message;
+  }
+}
+async function openTaskArtifact(path, row) {
+  const request = ++editorRequest;
+  try {
+    const item = await api(
+      path + `/${enc(row.dataset.kind)}/${enc(row.dataset.item)}`,
+    );
+    if (request !== editorRequest || !row.isConnected || !$("#dialog").open)
+      return;
+    const editor = $("#artifact-editor");
+    $("#artifact-editor-title").textContent = item.title;
+    $("#artifact-editor-detail").textContent = item.detail;
+    $("#artifact-editor-text").value = item.text;
+    if (!editor.open) editor.showModal();
+    editor.onclose = () => {
+      if (editor.open) return;
+      $("#artifact-editor-text").value = "";
+      if (row.isConnected) row.focus();
+    };
+  } catch (error) {
+    notify(error.message);
+  }
+}
+$("#artifact-editor-close").addEventListener("click", () => {
+  editorRequest++;
+  $("#artifact-editor").close();
+});
+$("#artifact-editor").addEventListener("cancel", () => editorRequest++);
+
 async function artifactDetails(pid, jid, reference) {
   const a = await api(endpoint(pid, jid) + `/artifacts/${enc(reference)}`);
   modal(
@@ -1037,6 +1114,12 @@ document.addEventListener("dblclick", (event) => {
   if (row) openProject(row.dataset.id);
 });
 document.addEventListener("keydown", (event) => {
+  if ($("#artifact-editor").open && event.key === "Escape") {
+    event.preventDefault();
+    editorRequest++;
+    $("#artifact-editor").close();
+    return;
+  }
   if ($("#dialog").open) return;
   if (fullscreen) {
     if (event.key === "Escape") {
@@ -1217,6 +1300,8 @@ window.addEventListener("hashchange", () => {
   }
   history.replaceState(null, "", location.pathname);
   closeTerminal();
+  editorRequest++;
+  if ($("#artifact-editor").open) $("#artifact-editor").close();
   if ($("#dialog").open) $("#dialog").close();
   state.data = { projects: [], participants: [], actions: [] };
   state.opened = [];

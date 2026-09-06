@@ -8,6 +8,8 @@ import subprocess
 
 from ctlrm.managed.area import Area
 from ctlrm.managed.artifacts import read_artifact
+from ctlrm.managed.commits import read_commit
+from ctlrm.runtime.messages import MailboxMessage
 from ctlrm.managed.projects import ProjectStore
 from ctlrm.managed.storage import Journal, read_record
 from ctlrm.managed.workflows import WorkflowService
@@ -116,6 +118,8 @@ class Workbench:
                 active = next(
                     (e for e in run.get("executions", []) if e["id"] == run.get("active")), None
                 )
+                for execution in run.get("executions", []):
+                    execution.pop("sent_messages", None)
                 clean = {}
                 for sid, session in item.get("sessions", {}).items():
                     clean[sid] = {
@@ -201,6 +205,89 @@ class Workbench:
         root = self.runtime(project, job)
         area = read_record(root / "area.yaml")
         return read_artifact(root, area["id"], reference)
+
+    def _execution(self, project: str, job: str, execution_id: str) -> tuple[Path, dict, dict]:
+        """Resolve an exact execution from accepted history, including archived jobs."""
+        root = self.runtime(project, job)
+        run = Journal(root, storage_root=root).replay()[0].get("run") or {}
+        execution = next((e for e in run.get("executions", []) if e["id"] == execution_id), None)
+        if execution is None:
+            raise ValueError("unknown execution in this job")
+        return root, run, execution
+
+    def execution_artifacts(self, project: str, job: str, execution_id: str) -> dict:
+        """List retained commits and accepted outgoing messages for one task visit.
+
+        Parameters
+        ----------
+        project, job, execution_id
+            Exact identities selected in the task details panel.
+        """
+        _, _, execution = self._execution(project, job, execution_id)
+        items = []
+        note = "Commit text is retained when an outcome is submitted."
+        incoming = execution["input"].get("artifact")
+        if incoming:
+            head = self.artifact(project, job, incoming)["head_commit"]
+            items.append({"kind": "commit", **head, "detail": f"Input commit · {head['sha']}"})
+        if execution["artifact"]:
+            artifact = self.artifact(project, job, execution["artifact"])
+            note = artifact["commits_note"]
+            commits = artifact["commits"] or [artifact["head_commit"]]
+            for commit in commits:
+                if any(i["id"] == commit["id"] for i in items):
+                    continue
+                label = "Commit in this execution" if artifact["commits"] else "Output HEAD"
+                items.append({"kind": "commit", **commit, "detail": f"{label} · {commit['sha']}"})
+        for message in execution["sent_messages"]:
+            items.append(
+                {
+                    "kind": "message",
+                    "id": message["id"],
+                    "title": message["title"],
+                    "detail": f"{message['from']} → {message['to']} · {message['created_at']}",
+                }
+            )
+        if execution["summary"] is not None:
+            items.append(
+                {
+                    "kind": "report",
+                    "id": execution["id"],
+                    "title": f"Outcome report: {execution['outcome']}",
+                    "detail": f"{execution['participant']} → coordinator · {execution['completed_at']}",
+                }
+            )
+        return {"execution_id": execution_id, "items": items, "note": note}
+
+    def execution_text(
+        self, project: str, job: str, execution_id: str, kind: str, item_id: str
+    ) -> dict:
+        """Open only a document listed under this execution; never accept arbitrary revisions."""
+        listing = self.execution_artifacts(project, job, execution_id)
+        item = next((i for i in listing["items"] if i["kind"] == kind and i["id"] == item_id), None)
+        if item is None:
+            raise ValueError("artifact does not belong to this execution")
+        root, run, execution = self._execution(project, job, execution_id)
+        if kind == "commit":
+            area = read_record(root / "area.yaml")
+            text = read_commit(root, area["id"], item_id)["text"]
+        elif kind == "message":
+            message = next(m for m in execution["sent_messages"] if m["id"] == item_id)
+            note = MailboxMessage.model_validate(message)
+            text = (
+                f"From: {note.from_}\nTo: {note.to}\nSent: {note.created_at}\n"
+                f"Subject: {note.title}\n\n{note.body}"
+            )
+            if note.files:
+                text += "\n\nRelated files:\n" + "\n".join(note.files)
+        else:
+            text = (
+                f"From: {execution['participant']}\nTo: coordinator\n"
+                f"Run: {run['id']}\nExecution: {execution_id}\n"
+                f"Sent: {execution['completed_at']}\nOutcome: {execution['outcome']}\n\n"
+                f"{execution['summary']}\n"
+            )
+        return {**item, "text": text}
 
     def files(self, project: str, job: str, artifact: str | None = None) -> dict:
         """List current code or a manifest inventory, preserving the selected version."""

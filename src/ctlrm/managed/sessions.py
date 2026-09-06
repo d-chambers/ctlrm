@@ -18,7 +18,7 @@ from ctlrm.runtime.room import _write_exclusive_atomic
 
 def mailbox(area: Area, participant: str, message: dict) -> None:
     """Publish a committed managed message, including bootstrap before signature claim."""
-    if participant not in area.data["roles"]:
+    if participant not in {*area.data["roles"], "coordinator"}:
         raise ValueError("recipient is outside the immutable managed roster")
     item = MailboxMessage.model_validate(message)
     path = area.room.root / "participants" / participant / "inbox" / f"{item.id}.md"

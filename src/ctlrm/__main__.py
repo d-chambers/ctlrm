@@ -216,6 +216,7 @@ def send(
     ] = None,
     file: Annotated[list[str], typer.Option(help="Related file path; may be repeated.")] = [],
     message_id: Annotated[str | None, typer.Option("--id", help="Explicit message ID.")] = None,
+    execution_id: Annotated[str | None, typer.Option(help="Owning workflow execution ID.")] = None,
 ) -> None:
     """Deliver an immutable message between registered participants."""
     if body is not None and body_file is not None:
@@ -236,7 +237,20 @@ def send(
             files=file,
             body=_read_text(body, body_file),
         )
-        typer.echo(_runtime(ctx).send_message(message))
+        runtime = _runtime(ctx)
+        if (runtime.root / "area.yaml").exists():
+            from ctlrm.managed.area import Area
+            from ctlrm.managed.workflows import WorkflowService
+
+            area = Area.load(runtime.project_root)
+            if area.data["mode"] == "workflow":
+                if not execution_id:
+                    raise ValueError("workflow messages require --execution-id from the assignment")
+                typer.echo(WorkflowService(area).send_message(message, execution_id))
+                return
+        if execution_id:
+            raise ValueError("execution IDs require a managed workflow")
+        typer.echo(runtime.send_message(message))
 
     _run(deliver)
 

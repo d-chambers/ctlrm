@@ -107,6 +107,23 @@
     </div>
     <div id="fullscreen-root"></div>
     <dialog id="dialog"><div id="dialog-content"></div></dialog>
+    <dialog id="artifact-editor" aria-labelledby="artifact-editor-title">
+      <div class="dialog-head">
+        <h2 id="artifact-editor-title"></h2>
+        <button id="artifact-editor-close" aria-label="Close text viewer">
+          ×
+        </button>
+      </div>
+      <p id="artifact-editor-detail" class="small muted"></p>
+      <p class="small">Read-only · Select and copy text freely</p>
+      <textarea
+        id="artifact-editor-text"
+        aria-label="Artifact text"
+        readonly
+        spellcheck="false"
+        wrap="off"
+      ></textarea>
+    </dialog>
     <div id="notice" role="status" hidden></div>
   </body>
 </html>

@@ -7,6 +7,7 @@ import stat
 import subprocess
 
 from ctlrm.managed.area import Area, git
+from ctlrm.managed.commits import retain_commits
 from ctlrm.runtime.location import runtime_path
 from ctlrm.managed.storage import digest, publish, read_record
 
@@ -131,7 +132,7 @@ def fingerprint(root: Path) -> dict:
     }
 
 
-def capture(area: Area, run_id: str, execution_id: str) -> str:
+def capture(area: Area, run_id: str, execution_id: str, *, base_commit: str | None = None) -> str:
     """Publish immutable evidence; only a committed outcome attributes it to the run."""
     record = {
         "area_id": area.data["id"],
@@ -139,6 +140,7 @@ def capture(area: Area, run_id: str, execution_id: str) -> str:
         "execution_id": execution_id,
         "version": fingerprint(area.root),
     }
+    record.update(retain_commits(area, base_commit, record["version"]["head"]))
     reference = "artifact-" + digest(record)
     publish(area.room.root / "artifacts" / f"{reference}.json", record)
     return reference

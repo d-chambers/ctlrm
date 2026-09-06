@@ -201,6 +201,21 @@ def create_app(
         """Read and verify an immutable execution artifact manifest."""
         return workbench.artifact(project, job, reference)
 
+    @app.get(
+        "/api/projects/{project}/jobs/{job}/executions/{execution}/artifacts", dependencies=auth
+    )
+    def execution_artifacts(project: str, job: str, execution: str) -> dict:
+        """List commits and messages attributed to an exact task execution."""
+        return workbench.execution_artifacts(project, job, execution)
+
+    @app.get(
+        "/api/projects/{project}/jobs/{job}/executions/{execution}/artifacts/{kind}/{item}",
+        dependencies=auth,
+    )
+    def execution_text(project: str, job: str, execution: str, kind: str, item: str) -> dict:
+        """Read the retained text of a commit, mailbox message, or outcome report."""
+        return workbench.execution_text(project, job, execution, kind, item)
+
     @app.get("/api/projects/{project}/jobs/{job}/files", dependencies=auth)
     def files(project: str, job: str, artifact: str | None = None) -> dict:
         """List code from the worktree or a selected artifact version."""

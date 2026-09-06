@@ -203,6 +203,10 @@ class TaskExecution(Record):
     id: str
     task: str
     participant: str
+    base_commit: str | None
+    started_at: str
+    completed_at: str | None = None
+    sent_messages: list[dict] = Field(default_factory=list)
     status: Literal["waiting", "pending", "acknowledged", "completed", "abandoned"] = "waiting"
     session_id: str | None = None
     generation: int | None = None

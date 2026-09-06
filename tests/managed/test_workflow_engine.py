@@ -912,3 +912,49 @@ class TestInitialCommitWorkflow:
             )
             complete(engine, client, "done")
             assert engine.state["run"]["status"] == "completed"
+
+
+class TestOutgoingMessages:
+    """Outgoing task messages reuse supervisor ownership and crash recovery."""
+
+    def test_generation_and_replay(self, repository, template) -> None:
+        """Reject spoofed/stale senders and republish an accepted message after interrupted delivery."""
+        from ctlrm.managed.storage import now
+        from ctlrm.runtime.messages import MailboxMessage
+
+        client, _ = WorkflowService.submit(repository, template, "Task", "Build it")
+        terminal = FakeTerminal()
+        with client.area.journal.writer():
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            owner = prepare(engine, client)
+            message = MailboxMessage(
+                id="note",
+                from_=owner["participant"],
+                to="coordinator",
+                kind="message",
+                title="Findings",
+                body="The full findings",
+                status="new",
+                created_at=now(),
+            ).model_dump(by_alias=True)
+            stale = client.request(
+                "workflow-message", {**owner, "generation": 0, "message": message}
+            )
+            engine.tick()
+            assert engine.state["requests"][stale]["status"] == "rejected"
+            spoofed = client.request(
+                "workflow-message", {**owner, "message": {**message, "from": "reviewer"}}
+            )
+            engine.tick()
+            assert engine.state["requests"][spoofed]["status"] == "rejected"
+            assert client.area.room.read_inbox("coordinator") == []
+            engine.apply("workflow-message", {**owner, "message": message})
+            engine.commit("test-accepted-before-delivery")
+            assert client.area.room.read_inbox("coordinator") == []
+            engine = WorkflowEngine(client.area, terminal)
+            engine.tick()
+            engine.tick()
+            inbox = client.area.room.read_inbox("coordinator")
+            assert len(inbox) == 1 and inbox[0].execution_id == owner["execution_id"]
+            assert inbox[0].body.strip() == "The full findings"

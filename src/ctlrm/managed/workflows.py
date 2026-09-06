@@ -11,6 +11,7 @@ from ctlrm.managed.artifacts import capture, verify
 from ctlrm.managed.sessions import SessionEngine, SessionService, mailbox, message
 from ctlrm.managed.storage import identifier, now, read_record
 from ctlrm.runtime.location import runtime_path, runtime_reference
+from ctlrm.runtime.messages import MailboxMessage
 from ctlrm.runtime.participants import validate_participant_id
 from ctlrm.runtime.paths import validate_path_component
 from ctlrm.runtime.projects import PullRequest
@@ -104,6 +105,34 @@ class WorkflowService(SessionService):
         request = client.request("workflow-start", {}, definition["submission_id"])
         return client, request
 
+    def send_message(self, item: MailboxMessage, execution_id: str) -> str:
+        """Submit an immutable outgoing message for an explicitly selected execution.
+
+        Parameters
+        ----------
+        item
+            Message between registered participants.
+        execution_id
+            Assignment ID received by the sender; stale visits are rejected.
+        """
+        run = self.area.journal.replay()[0].get("run") or {}
+        request = self.request(
+            "workflow-message",
+            {
+                "run_id": run.get("id"),
+                "execution_id": execution_id,
+                "participant": item.from_,
+                "session_id": os.environ.get("CTLRM_SESSION"),
+                "generation": int(os.environ.get("CTLRM_GENERATION", "0")),
+                "message": item.model_dump(
+                    by_alias=True, exclude={"created_at", "run_id", "execution_id"}
+                ),
+            },
+            request_id=item.id,
+        )
+        self.await_result(request)
+        return item.id
+
     def join(self, participant: str) -> None:
         """Explicitly accept an assigned human role without changing the roster."""
         state = self.area.journal.replay()[0]
@@ -134,6 +163,7 @@ class WorkflowEngine(SessionEngine):
     def __init__(self, area: Area, terminal=None, **kwargs) -> None:
         """Load the immutable template; never reload the caller's mutable source file."""
         super().__init__(area, terminal, **kwargs)
+        self._delivered_messages: set[str] = set()
         self.definition = area.data["definition"]
         self.template = WorkflowTemplate.model_validate(self.definition["template"])
 
@@ -164,10 +194,26 @@ class WorkflowEngine(SessionEngine):
             ),
             None,
         )
+        refs = git(
+            self.area.root,
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            self.area.data["branch"],
+        )
+        head = next(
+            (
+                line.split()[1]
+                for line in refs.splitlines()
+                if line.split()[0] == self.area.data["branch"]
+            ),
+            None,
+        )
         execution = TaskExecution(
             id=identifier("execution"),
             task=destination,
             participant=self.definition["bindings"][role],
+            base_commit=head,
+            started_at=now(),
             fresh_after_native_id=previous_session["native_id"]
             if task.fresh_session and previous_session
             else None,
@@ -414,6 +460,34 @@ class WorkflowEngine(SessionEngine):
             ).model_dump()
             self._visit(self.template.entry, {})
             return
+        if kind == "workflow-message":
+            self.area.validate()
+            execution, _ = self._owner(payload)
+            item = MailboxMessage.model_validate(
+                {**payload.get("message", {}), "created_at": now()}
+            )
+            if item.from_ != execution["participant"]:
+                raise ValueError("message sender must own the execution")
+            if item.to not in {*self.area.data["roles"], "coordinator"}:
+                raise ValueError("message recipient must belong to this job")
+            self.area.room.read_signature(item.to)
+            if len(item.body.encode()) > 16384 or len(item.title.encode()) > 256:
+                raise ValueError("message body/title exceeds 16384/256 bytes")
+            if len(item.to_markdown().encode()) > 32768:
+                raise ValueError("message exceeds 32 KiB including metadata")
+            if len(execution["sent_messages"]) >= 64:
+                raise ValueError("execution exceeds 64 sent messages")
+            if any(item.id == m["id"] for e in run["executions"] for m in e["sent_messages"]):
+                raise ValueError("message ID already belongs to this run")
+            item = item.model_copy(
+                update={
+                    "run_id": run["id"],
+                    "execution_id": execution["id"],
+                    "created_at": now(),
+                }
+            )
+            execution["sent_messages"].append(item.model_dump(by_alias=True))
+            return
         if kind in {"workflow-ack", "workflow-report"}:
             self.area.validate()
             execution, session = self._owner(payload)
@@ -446,7 +520,12 @@ class WorkflowEngine(SessionEngine):
             )
             if outcome in self.template.tasks[execution["task"]].requires_pr and pr is None:
                 raise ValueError("this task requires repository-qualified PR metadata")
-            artifact = capture(self.area, self.state["run"]["id"], execution["id"])
+            artifact = capture(
+                self.area,
+                self.state["run"]["id"],
+                execution["id"],
+                base_commit=execution["base_commit"],
+            )
             if self.template.tasks[execution["task"]].checks_input(outcome) and execution[
                 "input"
             ].get("artifact"):
@@ -454,7 +533,11 @@ class WorkflowEngine(SessionEngine):
                 verify(self.area, execution["input"]["artifact"], version=captured["version"])
             self.area.validate()
             execution.update(
-                status="completed", outcome=outcome, summary=summary, artifact=artifact
+                status="completed",
+                outcome=outcome,
+                summary=summary,
+                artifact=artifact,
+                completed_at=now(),
             )
             if session:
                 session["work"]["status"] = "completed"
@@ -479,6 +562,11 @@ class WorkflowEngine(SessionEngine):
 
     def advance(self) -> None:
         """Bind ready sessions or humans and publish only already committed assignments."""
+        for execution in (self.state.get("run") or {}).get("executions", []):
+            for item in execution["sent_messages"]:
+                if item["id"] not in self._delivered_messages:
+                    mailbox(self.area, item["to"], item)
+                    self._delivered_messages.add(item["id"])
         if self.state.get("retiring"):
             if all(session["status"] == "stopped" for session in self.state["sessions"].values()):
                 self.state.update(retiring=False, retired=True, shutdown=True)
@@ -552,6 +640,7 @@ class WorkflowEngine(SessionEngine):
                 f"Allowed outcomes: {', '.join(self.template.tasks[execution['task']].transitions)}\n"
                 f"Before acting, run: {command} acknowledge {arguments}\n"
                 f"Report with: {command} report {arguments} --outcome OUTCOME --summary SUMMARY\n"
+                f"Send a task message with: {shlex.quote(sys.executable)} -m ctlrm --root {shlex.quote(str(self.area.root))} send --from {execution['participant']} --to RECIPIENT --execution-id {execution['id']} --title TITLE --body BODY\n"
                 "After native resume use your CURRENT generation in these commands. "
                 "Do not choose the next recipient; the workflow routes accepted outcomes. "
                 "After an accepted report, finish your turn and wait; do not perform further work."

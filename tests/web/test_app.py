@@ -38,6 +38,58 @@ class TestLocalBoundary:
         assert "frame-ancestors 'none'" in shell.headers["Content-Security-Policy"]
         assert client.get("/api/snapshot").json()["projects"] == []
 
+    def test_app_instances_are_isolated(self, tmp_path, repository) -> None:
+        """Shared routers must use each server's own store, capability, and loopback boundary."""
+        from fastapi.testclient import TestClient
+        from ctlrm.managed.projects import ProjectStore
+        from ctlrm.web.app import create_app
+
+        first, second = ProjectStore(tmp_path / "first"), ProjectStore(tmp_path / "second")
+        first.create(repository, "First", ["One"], project_id="one")
+        second.create(repository, "Second", ["Two"], project_id="two")
+        with (
+            TestClient(
+                create_app(first, token="first", port=8766),
+                base_url="http://127.0.0.1:8766",
+                headers={"Authorization": "Bearer first"},
+            ) as a,
+            TestClient(
+                create_app(second, token="second", port=8767),
+                base_url="http://127.0.0.1:8767",
+                headers={"Authorization": "Bearer second"},
+            ) as b,
+        ):
+            assert a.get("/api/snapshot").json()["projects"][0]["project"]["id"] == "one"
+            assert b.get("/api/snapshot").json()["projects"][0]["project"]["id"] == "two"
+            assert (
+                a.get("/api/templates", headers={"Authorization": "Bearer second"}).status_code
+                == 401
+            )
+            assert (
+                b.get("/api/snapshot", headers={"Authorization": "Bearer first"}).status_code == 401
+            )
+            response = b.post(
+                "/api/projects",
+                headers={"Authorization": "Bearer first"},
+                json={
+                    "project_id": "forbidden",
+                    "root": str(repository),
+                    "name": "Bad",
+                    "goals": ["No"],
+                },
+            )
+            assert response.status_code == 401 and len(second.list()) == 1
+            assert (
+                b.get("/api/snapshot", headers={"Origin": "http://127.0.0.1:8766"}).status_code
+                == 403
+            )
+            with b.websocket_connect(
+                "/api/terminal/p/j/s/1",
+                headers={"Origin": "http://127.0.0.1:8767", "Host": "127.0.0.1:8767"},
+            ) as socket:
+                socket.send_json({"token": "first"})
+                assert socket.receive()["code"] == 1008
+
     @pytest.mark.parametrize(
         "headers",
         [{"Host": "attacker.test:8766"}, {"Origin": "https://attacker.test"}, {"Origin": "null"}],

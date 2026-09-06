@@ -49,7 +49,7 @@ def browser(tmp_path, repository, monkeypatch):
             WorkflowEngine(client.area).tick()
         return original(client, request_id, timeout=0.2)
 
-    monkeypatch.setattr("ctlrm.web.app.supervisor.start", lambda area: None)
+    monkeypatch.setattr("ctlrm.web.api.supervisor.start", lambda area: None)
     monkeypatch.setattr(SessionService, "await_result", apply)
     with TestClient(
         app, base_url="http://127.0.0.1:8766", headers={"Authorization": "Bearer test-capability"}

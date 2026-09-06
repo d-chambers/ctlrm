@@ -13,8 +13,9 @@ class TestBootstrap:
         for module in [
             "ctlrm",
             "ctlrm.__main__",
-            "ctlrm.agents.launcher",
-            "ctlrm.communication.tmux",
+            "ctlrm.managed.projects",
+            "ctlrm.managed.workflows",
+            "ctlrm.communication.terminal",
             "ctlrm.web.app",
             "ctlrm.runtime.room",
         ]:

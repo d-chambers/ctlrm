@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from pathlib import Path
 
-from ctlrm.runtime import ProjectRuntime
 from ctlrm.runtime.filesystem import mkdir_shared as _mkdir_shared
 from ctlrm.runtime.manifest import RoomManifest
+from ctlrm.runtime.location import runtime_path
 from ctlrm.runtime.messages import MailboxMessage
 from ctlrm.runtime.participants import ParticipantSignature, validate_participant_id
 
@@ -63,8 +63,25 @@ class InitializationResult:
     created: bool
 
 
-class RoomRuntime(ProjectRuntime):
+class RoomRuntime:
     """Manage a room definition, participant signatures, and messages."""
+
+    def __init__(self, project_root: Path) -> None:
+        """Initialize paths for a project runtime."""
+        self.project_root = project_root
+
+    @property
+    def root(self) -> Path:
+        """Resolve storage only for operations that need a local runtime."""
+        return runtime_path(self.project_root)
+
+    def ensure_writable(self) -> None:
+        """Reject public runtime mutations after a managed job has retired."""
+        if (self.root / "area.yaml").exists():
+            from ctlrm.managed.storage import Journal
+
+            if Journal(self.project_root).replay()[0].get("retired"):
+                raise ValueError("job is retired; its runtime is read-only")
 
     def init_project(self) -> None:
         """Create the minimal room directories for a shared Unix group."""

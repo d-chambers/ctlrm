@@ -1,6 +1,7 @@
 """Reusable graph validation rejects ambiguous or unrouteable definitions."""
 
 import copy
+from pathlib import Path
 
 import pytest
 
@@ -83,14 +84,15 @@ class TestExplicitVerificationPolicy:
 class TestExamples:
     """The documented reusable YAML files must remain valid source templates."""
 
-    @pytest.mark.parametrize("name", ["ship", "single-agent", "implement-review"])
-    def test_source_template(self, name) -> None:
+    @pytest.mark.parametrize(
+        "path",
+        sorted((Path(__file__).resolve().parents[2] / "src/ctlrm/web/templates").glob("*.yaml")),
+        ids=lambda path: path.stem,
+    )
+    def test_source_template(self, path) -> None:
         """Validate examples through the same strict parser used at submission."""
-        from pathlib import Path
-
-        path = Path(__file__).resolve().parents[2] / "src/ctlrm/web/templates" / f"{name}.yaml"
         template = WorkflowTemplate.parse(path.read_text())
-        if name == "ship":
+        if path.stem == "ship":
             assert (
                 template.limits.max_specialist_executions
                 >= template.tasks["implement"].max_executions

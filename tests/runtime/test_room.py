@@ -670,10 +670,8 @@ class TestSharedDirectories:
 
     def test_shared_initialization(self, tmp_path: Path) -> None:
         """Launching first does not prevent later shared-group room access."""
-        from ctlrm.runtime import ProjectRuntime
-
-        ProjectRuntime(tmp_path).init_participant("worker")
         runtime = RoomRuntime(tmp_path)
+        runtime.init_participant("worker")
         initialize(runtime)
         assert runtime.root.stat().st_mode & 0o2770 == 0o2770
         assert (runtime.root / "participants").stat().st_mode & 0o2770 == 0o2770

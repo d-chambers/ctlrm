@@ -58,6 +58,42 @@ class TestOwnedTerminal:
         finally:
             terminal.server.cmd("kill-server")
 
+    def test_disappears_during_health_check(self, tmp_path: Path, monkeypatch) -> None:
+        """A terminal lost between lookup and verification is missing, allowing recovery."""
+        from ctlrm.communication.terminal import process_identity
+
+        token = uuid4().hex
+        terminal = TmuxTerminal(token)
+        spec = {
+            "id": "session-race",
+            "generation": 1,
+            "area_id": token,
+            "root": str(tmp_path),
+            "token": token,
+            "terminal_name": "owned-race",
+            "argv": [sys.executable, "-c", "import time; time.sleep(60)"],
+        }
+        publish(tmp_path / ".ctlrm/sessions/session-race/launch-1.json", spec)
+        try:
+            identity = terminal.ensure(spec)
+            lookup = terminal._session
+
+            def disappear(spec):
+                """Remove this test's session after lookup, before the next tmux operation."""
+                session = lookup(spec)
+                if session is not None:
+                    session.kill()
+                    deadline = time.monotonic() + 5
+                    while process_identity(identity["host_pid"]) and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    assert process_identity(identity["host_pid"]) is None
+                return session
+
+            monkeypatch.setattr(terminal, "_session", disappear)
+            assert terminal.health(spec, identity) == "missing"
+        finally:
+            terminal.server.cmd("kill-server")
+
     def test_live_host_dead_provider(self, tmp_path: Path) -> None:
         """A provider that exits leaves an inspectable host, not a false healthy session."""
         token = uuid4().hex
@@ -90,6 +126,27 @@ class TestOwnedTerminal:
 
 class TestTerminalErrors:
     """Library exception types do not escape the adapter's public error contract."""
+
+    @pytest.mark.parametrize("occupied,host_alive", [(True, True), (True, False), (False, True)])
+    @pytest.mark.parametrize("error_type", [ValueError, OSError])
+    def test_uncertain_identity_is_not_missing(
+        self, monkeypatch, occupied, host_alive, error_type
+    ) -> None:
+        """An occupied name or surviving host must retain its ownership error."""
+        from ctlrm.communication import terminal as module
+
+        terminal = TmuxTerminal(uuid4().hex)
+        lookups = iter([object(), object() if occupied else None])
+        monkeypatch.setattr(terminal, "_session", lambda spec: next(lookups))
+        monkeypatch.setattr(module, "process_identity", lambda pid: "owned" if host_alive else None)
+
+        def invalid_identity(spec, session):
+            """Simulate a failed ownership query at the disappearing-session boundary."""
+            raise error_type("ownership could not be verified")
+
+        monkeypatch.setattr(terminal, "_identity", invalid_identity)
+        with pytest.raises(error_type, match="ownership could not be verified"):
+            terminal.health({}, {"host_pid": 1, "host": "owned"})
 
     def test_libtmux_error_is_translated(self, monkeypatch) -> None:
         """The engine can block one failed launch instead of crashing supervision."""

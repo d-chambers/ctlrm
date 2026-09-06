@@ -191,7 +191,17 @@ class TmuxTerminal:
         session = self._session(spec)
         if session is None:
             return None
-        if self._identity(spec, session) != identity:
+        try:
+            observed = self._identity(spec, session)
+        except (libtmux.exc.LibTmuxException, ValueError, OSError):
+            # A session can disappear after lookup. Only confirmed absence permits recovery.
+            if (
+                self._session(spec) is None
+                and process_identity(identity["host_pid"]) != identity["host"]
+            ):
+                return None
+            raise
+        if observed != identity:
             raise ValueError("terminal identity changed; refusing to adopt or stop it")
         return session
 

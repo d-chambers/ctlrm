@@ -1,0 +1,203 @@
+{
+  "date": "2026-09-06",
+  "application": "CSV Brief",
+  "description": "Standard-library Python streaming CSV summary CLI",
+  "project": "csv-brief",
+  "job": "build",
+  "provenance": {
+    "managed_agent_build": true,
+    "provider": "codex",
+    "terminal_manager": "libtmux",
+    "app_commit": "e0db8affd86cc79ab27253ccbcea3b22749a1c54",
+    "runtime_commit": "d0cba76"
+  },
+  "recovery_checks": [
+    {
+      "test": "initial live writer checkpoint",
+      "at": "2026-09-06T15:20:29Z",
+      "generation": 1,
+      "native_id": "01a07747-69a5-7e90-b843-0aad144b817a",
+      "execution": "execution-257d8cb8c6824a6a85fde7c75120d470",
+      "files": 5
+    },
+    {
+      "test": "automatic recovery after provider death",
+      "at": "2026-09-06T15:22:15Z",
+      "generation": 2,
+      "same_native_id": true,
+      "same_execution": true,
+      "uncommitted_files_preserved": true,
+      "killed_owned_processes": 3,
+      "exit_status": -9
+    },
+    {
+      "test": "supervisor crash and restart",
+      "at": "2026-09-06T15:22:15Z",
+      "agent_generation_unchanged": true,
+      "agent_process_identity_unchanged": true,
+      "same_execution": true,
+      "uncommitted_files_preserved": true
+    },
+    {
+      "test": "automatic recovery after terminal loss",
+      "at": "2026-09-06T15:23:55Z",
+      "generation": 3,
+      "same_native_id": true,
+      "same_execution": true,
+      "uncommitted_files_preserved": true
+    },
+    {
+      "test": "explicit stop suppresses automatic restart",
+      "at": "2026-09-06T15:23:59Z",
+      "generation": 3,
+      "repeated_request_idempotent": true
+    },
+    {
+      "test": "explicit native resume",
+      "at": "2026-09-06T15:25:46Z",
+      "generation": 4,
+      "same_native_id": true,
+      "same_execution": true,
+      "uncommitted_files_preserved": true
+    },
+    {
+      "test": "stale generation rejected",
+      "at": "2026-09-06T15:25:46Z",
+      "current_generation": 4,
+      "old_generation": 3,
+      "current_process_preserved": true
+    },
+    {
+      "test": "writer released after faults",
+      "at": "2026-09-06T15:25:46Z"
+    },
+    {
+      "test": "explicit fresh-session replacement",
+      "at": "2026-09-06T15:34:23Z",
+      "generation": 2,
+      "new_native_id": true,
+      "same_review_execution": true,
+      "same_input_artifact": true,
+      "code_unchanged": true
+    },
+    {
+      "test": "one implementation and one review handoff",
+      "at": "2026-09-06T15:36:03Z",
+      "tasks": [
+        {
+          "task": "implement",
+          "status": "completed",
+          "outcome": "completed",
+          "execution": "execution-257d8cb8c6824a6a85fde7c75120d470"
+        },
+        {
+          "task": "review",
+          "status": "completed",
+          "outcome": "approved",
+          "execution": "execution-8b20888aa86443869c3627cb4735ff9d"
+        },
+        {
+          "task": "counterpart",
+          "status": "pending",
+          "outcome": null,
+          "execution": "execution-0829201f9f564bc585eb34852c0c8a89"
+        }
+      ],
+      "commit": "e0db8affd86cc79ab27253ccbcea3b22749a1c54",
+      "worktree_clean": true
+    }
+  ],
+  "final_checks": {
+    "completed_writer_resumed_same_native_session": true,
+    "writer_final_generation": 5,
+    "completed_task_not_reopened": true,
+    "no_duplicate_task_or_commit": true,
+    "implementation_commits": 1,
+    "unchanged_commit": "e0db8affd86cc79ab27253ccbcea3b22749a1c54",
+    "all_agent_sessions_stopped": true,
+    "supervisor_stopped": true,
+    "tmux_sessions_remaining": 0,
+    "processes_in_app_worktree": [],
+    "counterpart_gate": "pending"
+  },
+  "task_artifacts": [
+    {
+      "task": "implement",
+      "items": [
+        {
+          "kind": "commit",
+          "id": "commit-bcd2e031bc052bc23b118af27aff3e7d0e0a58399947a2aef544fbec404c3405"
+        },
+        {
+          "kind": "message",
+          "id": "msg-20260906T152656-24f1ff5e"
+        },
+        {
+          "kind": "report",
+          "id": "execution-257d8cb8c6824a6a85fde7c75120d470"
+        }
+      ]
+    },
+    {
+      "task": "review",
+      "items": [
+        {
+          "kind": "commit",
+          "id": "commit-bcd2e031bc052bc23b118af27aff3e7d0e0a58399947a2aef544fbec404c3405"
+        },
+        {
+          "kind": "message",
+          "id": "msg-20260906T153546-3237d120"
+        },
+        {
+          "kind": "report",
+          "id": "execution-8b20888aa86443869c3627cb4735ff9d"
+        }
+      ]
+    }
+  ],
+  "validation": {
+    "app_tests_passed": 14,
+    "app_cli_acceptance_passed": 13,
+    "runtime_tests_passed": 41,
+    "ruff": "passed",
+    "prek": "passed",
+    "independent_review": "approved with no actionable findings"
+  },
+  "scope": {
+    "counterpart_review": "pending source-transmission approval",
+    "remote_pr_and_ci": "not exercised; no remote was configured",
+    "not_exercised": [
+      "machine reboot",
+      "provider credential or network outage",
+      "different interpreter installation path",
+      "crash before native recovery registration"
+    ]
+  },
+  "source_evidence": [
+    {
+      "file": "recovery-checks.json",
+      "sha256": "5f3a61f2d485bf9b1e3dd7695381d2cfdd147230351181318d6be41bc9b4b032"
+    },
+    {
+      "file": "final-acceptance.json",
+      "sha256": "0483a05d81cd0d76c5818a91da3fa3f6d79d0a52236f2b4e788bb228c39207c6"
+    },
+    {
+      "file": "app-acceptance.json",
+      "sha256": "2332c8f8cad6dfafec7dfcbb5519a83d71663e93906d50b41fb1fcd3671d22d8"
+    },
+    {
+      "file": "app-tests.txt",
+      "sha256": "189ba3e93109df5c0e2844a310a6be7d2a2f21d45cad6afe125bf9815602596f"
+    },
+    {
+      "file": "runtime-tests.txt",
+      "sha256": "d77b1376218e38d6643d1705fad4ef31f241e9c801355fbe10d4e315b14aae91"
+    },
+    {
+      "file": "runtime-lint.txt",
+      "sha256": "84617e5ab13858c275ee0228d2588844cac631a8dce9f3d2dadc36a8d5320d67"
+    }
+  ]
+}

@@ -35,3 +35,5 @@ Activity lists the latest accepted project/job events. Archive requires all jobs
 ## Verification
 
 Run `uv run pytest --cov ctlrm --cov-report term-missing` and `uvx prek run --all-files`. The web tests use disposable real Git repositories and the actual supervisor transition engine; the terminal test streams keyboard/output traffic over a WebSocket through a real tmux client and verifies that detaching leaves the agent running. `npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix frontend run check` reproduces the locally bundled terminal assets and checks authored frontend syntax/formatting. `uv build` includes the browser assets, licenses, and canonical YAML templates in the wheel.
+
+Acceptance records for the workbench and both managed sample applications are indexed in [Acceptance evidence](evidence/readme.md). Each record distinguishes real providers from deterministic browser fixtures and lists pending review or remote-workflow checks.

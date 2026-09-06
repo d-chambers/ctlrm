@@ -65,7 +65,7 @@ def pending_message(session: dict) -> dict | None:
 
 
 class SessionService:
-    """Client API shared by CLI/TUI; only submissions and owned signatures are written."""
+    """Client API shared by CLI/web; only submissions and owned signatures are written."""
 
     def __init__(self, area: Area) -> None:
         """Bind services to one immutable coordination area."""

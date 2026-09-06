@@ -254,7 +254,7 @@ def attach(ctx: typer.Context, session_id: Annotated[str, typer.Option()]) -> No
 
 @supervisor_app.command("start")
 def supervisor_start(ctx: typer.Context, foreground: bool = False, interval: float = 1) -> None:
-    """Start one supervisor; closing this CLI or TUI will not stop background execution."""
+    """Start one supervisor; closing this CLI or browser will not stop background execution."""
     _run(lambda: (supervisor.serve if foreground else supervisor.start)(_area(ctx), interval))
 
 

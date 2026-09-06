@@ -1,4 +1,4 @@
-"""A detached single-writer supervisor whose lifetime is independent of CLI/TUI."""
+"""A detached single-writer supervisor whose lifetime is independent of CLI/web."""
 
 import argparse
 from contextlib import contextmanager

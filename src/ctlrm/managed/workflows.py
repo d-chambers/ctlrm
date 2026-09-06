@@ -21,7 +21,7 @@ from ctlrm.scheduler import transition
 
 
 class WorkflowService(SessionService):
-    """Shared CLI/TUI workflow operations; clients submit, the supervisor commits."""
+    """Shared CLI/web workflow operations; clients submit, the supervisor commits."""
 
     @classmethod
     def submit(

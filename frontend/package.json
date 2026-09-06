@@ -3,14 +3,16 @@
   "private": true,
   "scripts": {
     "build": "node build.mjs",
-    "check": "node --check ../src/ctlrm/web/static/app.js && prettier --check build.mjs package.json ../src/ctlrm/web/static/app.js ../src/ctlrm/web/static/app.css ../src/ctlrm/web/static/index.html",
-    "format": "prettier --write build.mjs package.json ../src/ctlrm/web/static/app.js ../src/ctlrm/web/static/app.css ../src/ctlrm/web/static/index.html"
+    "check": "node --check ../src/ctlrm/web/static/app.js && prettier --check build.mjs package.json playwright.config.mjs ../tests/web/browser/*.mjs ../src/ctlrm/web/static/app.js ../src/ctlrm/web/static/app.css ../src/ctlrm/web/static/index.html",
+    "format": "prettier --write build.mjs package.json playwright.config.mjs ../tests/web/browser/*.mjs ../src/ctlrm/web/static/app.js ../src/ctlrm/web/static/app.css ../src/ctlrm/web/static/index.html",
+    "test:browser": "playwright test"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "prettier": "3.9.6"
   }
 }

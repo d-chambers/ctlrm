@@ -37,3 +37,18 @@ Activity lists the latest accepted project/job events. Archive requires all jobs
 Run `uv run pytest --cov ctlrm --cov-report term-missing` and `uvx prek run --all-files`. The web tests use disposable real Git repositories and the actual supervisor transition engine; the terminal test streams keyboard/output traffic over a WebSocket through a real tmux client and verifies that detaching leaves the agent running. `npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix frontend run check` reproduces the locally bundled terminal assets and checks authored frontend syntax/formatting. `uv build` includes the browser assets, licenses, and canonical YAML templates in the wheel.
 
 Acceptance records for the workbench and both managed sample applications are indexed in [Acceptance evidence](evidence/readme.md). Each record distinguishes real providers from deterministic browser fixtures and lists pending review or remote-workflow checks.
+
+CI runs frontend syntax/format checks, verifies that rebuilding terminal assets leaves the checked-in bundle unchanged, and records the slowest 25 Python tests on both supported Python versions. It also installs the wheel into a separate virtual environment and runs the real `ctlrm serve` CLI from a disposable directory. The Chromium check loads bundled assets and workflow templates, opens a project and its task graph, and reads retained commits, messages, and reports through the editor. Its fixture uses real Git/project/workflow records with human roles; it does not launch model providers or substitute for the managed-agent acceptance runs.
+
+To reproduce the installed-wheel browser check after `uv sync --locked` and `npm --prefix frontend ci`:
+
+```sh
+wheel_check=$(mktemp -d)
+uv build --out-dir "$wheel_check/dist"
+uv venv "$wheel_check/venv"
+uv pip install --python "$wheel_check/venv/bin/python" "$wheel_check"/dist/*.whl
+npm --prefix frontend exec -- playwright install --with-deps chromium --only-shell
+CTLRM_BROWSER_PYTHON="$wheel_check/venv/bin/python" CTLRM_BROWSER_REQUIRE_WHEEL=1 npm --prefix frontend run test:browser
+```
+
+For development, `npm --prefix frontend run test:browser` uses the repository's `.venv` by default. Browser failures retain a trace and screenshot under `frontend/test-results/`; CI uploads these together with Python JUnit results. Playwright's [CI guide](https://playwright.dev/docs/ci) describes the browser and operating-system dependency installation used here.

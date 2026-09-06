@@ -1,6 +1,8 @@
 """Durable standalone session transitions and provider recovery orchestration."""
 
 import copy
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 import shlex
 import sys
@@ -238,168 +240,212 @@ class SessionEngine:
             raise ValueError("stale session generation; retained as rejected evidence")
         return session
 
-    def apply(self, kind: str, payload: dict) -> None:
-        """Validate one client operation against current committed state."""
-        if kind == "launch":
-            participant = payload["participant"]
-            role = self.area.data["roles"].get(participant)
-            if not role or role["kind"] != "agent":
-                raise ValueError("launch requires an assigned agent role")
-            if any(s["participant"] == participant for s in self.state["sessions"].values()):
-                raise ValueError("participant already has a session; use resume or replace")
-            profile = ProviderProfile.model_validate(
-                self.area.data["profiles"][role["profile"]]
-            ).checked()
-            session = {
-                "id": identifier("session"),
-                "participant": participant,
-                "profile": profile.model_dump(),
-                "generation": 0,
-                "recoveries": 0,
-                "work": None,
-                "interactions": [],
-            }
-            self._new_generation(session, resume=False)
-            self.state["sessions"][session["id"]] = session
-            return
-        if kind == "supervisor-stop":
-            self.state["shutdown"] = True
-            return
-        if kind == "reconcile-area":
-            self.area.validate()
-            self.state["paused"] = None
-            return
-        session = self._session(
-            payload, generation="generation" in payload or kind not in {"stop", "resume", "replace"}
-        )
-        if kind in {"interact", "interaction-start", "interaction-finish"}:
-            self._interaction(session, kind, payload)
-            return
-        if kind == "ready":
-            if session["status"] not in {"spawning", "starting", "ready", "reconciling"}:
-                raise ValueError("session is not awaiting readiness")
-            revision = payload["revision"]
-            from ctlrm.runtime.paths import validate_path_component
+    def _handlers(self) -> dict[str, Callable[[dict], None]]:
+        """Map public request names to their operation-specific validation and mutation."""
+        return {
+            "launch": self._launch,
+            "supervisor-stop": self._shutdown,
+            "reconcile-area": self._reconcile_area,
+            "ready": self._ready,
+            "prompt": self._prompt,
+            "acknowledge": partial(self._work_status, kind="acknowledge"),
+            "disposition": partial(self._work_status, kind="disposition"),
+            "stop": self._stop,
+            "resume": partial(self._restart, resume=True),
+            "replace": partial(self._restart, resume=False),
+            "interact": partial(self._conversation, kind="interact"),
+            "interaction-start": partial(self._conversation, kind="interaction-start"),
+            "interaction-finish": partial(self._conversation, kind="interaction-finish"),
+        }
 
-            validate_path_component(revision, label="recovery revision", max_length=128)
-            record = read_record(
-                self.area.runtime / "sessions" / session["id"] / "recovery" / f"{revision}.json"
-            )
-            profile = ProviderProfile.model_validate(session["profile"]).checked()
-            if not isinstance(record.get("native_id"), str):
-                raise ValueError("native session ID must be a UUID string")
-            UUID(record["native_id"])
-            expected = {
-                "schema_version": 1,
-                "area_id": self.area.data["id"],
-                "session_id": session["id"],
-                "generation": session["generation"],
-                "root": str(self.area.root),
-                "executable": profile.executable,
-                "context": profile.context,
-                "required_environment": profile.required_environment,
-                "resume_argv": profile.command(record["native_id"], "", resume=True),
-            }
-            if any(record.get(key) != value for key, value in expected.items()):
-                raise ValueError("recovery revision does not match the authoritative profile/area")
-            if session.get("native_id") and session["native_id"] != record["native_id"]:
-                raise ValueError("native session ID changed during resume")
-            self.area.room.read_signature(session["participant"])
-            if session["status"] == "spawning":
-                session["identity"] = self.terminal.adopt(session["spec"])
-            session.update(
-                native_id=record["native_id"],
-                recovery=record,
-                recoveries=0,
-                ready=True,
-                status="reconciling" if session["recovering"] else "ready",
-                error=None,
-            )
-            if session["recovering"]:
-                work = session["work"]
-                session["reconciliation"] = message(
-                    session["participant"],
-                    "reconcile",
-                    f"Reconcile work ID {work['id']} from its persisted mailbox. Report completed, not_started, "
-                    "in_progress (explicit continuation), or uncertain using session disposition. Do not replay effects blindly.",
-                )
-            return
-        if kind == "prompt":
-            if self.area.data["mode"] != "standalone":
-                raise ValueError("workflow sessions receive work only from the workflow scheduler")
-            if session.get("work") and session["work"]["status"] != "completed":
-                raise ValueError("the previous prompt still needs completion or reconciliation")
-            if not session["ready"] or session["status"] != "ready":
-                raise ValueError("session is not ready")
-            text = payload.get("text")
-            if not isinstance(text, str) or not text.strip():
-                raise ValueError("prompt must contain text")
-            if len(text.encode()) > 65536:
-                raise ValueError("prompt exceeds 65536 bytes")
-            work_id = identifier("work")
-            outbound = message(
+    def _guard(self, kind: str, payload: dict) -> None:
+        """Keep all public dispatch, including direct callers, behind the paused-area policy."""
+        if self.state["paused"] and kind not in {
+            "reconcile-area",
+            "supervisor-stop",
+            "stop",
+            "workflow-cancel",
+        }:
+            raise ValueError("area is paused; explicitly reconcile after restoring its identity")
+
+    def apply(self, kind: str, payload: dict) -> None:
+        """Enforce shared guards once, then invoke the named operation handler."""
+        self._guard(kind, payload)
+        handler = self._handlers().get(kind)
+        if handler is None:
+            raise ValueError(f"unknown request kind: {kind}")
+        handler(payload)
+
+    def _launch(self, payload: dict) -> None:
+        """Prepare one participant session using its checked provider profile."""
+        participant = payload["participant"]
+        role = self.area.data["roles"].get(participant)
+        if not role or role["kind"] != "agent":
+            raise ValueError("launch requires an assigned agent role")
+        if any(s["participant"] == participant for s in self.state["sessions"].values()):
+            raise ValueError("participant already has a session; use resume or replace")
+        profile = ProviderProfile.model_validate(
+            self.area.data["profiles"][role["profile"]]
+        ).checked()
+        session = {
+            "id": identifier("session"),
+            "participant": participant,
+            "profile": profile.model_dump(),
+            "generation": 0,
+            "recoveries": 0,
+            "work": None,
+            "interactions": [],
+        }
+        self._new_generation(session, resume=False)
+        self.state["sessions"][session["id"]] = session
+
+    def _shutdown(self, payload: dict) -> None:
+        """Stop supervision after the request is committed."""
+        self.state["shutdown"] = True
+
+    def _reconcile_area(self, payload: dict) -> None:
+        """Clear a pause only after the recorded worktree identity is restored."""
+        self.area.validate()
+        self.state["paused"] = None
+
+    def _ready(self, payload: dict) -> None:
+        """Accept recovery evidence for the current native session generation."""
+        session = self._session(payload)
+        if session["status"] not in {"spawning", "starting", "ready", "reconciling"}:
+            raise ValueError("session is not awaiting readiness")
+        revision = payload["revision"]
+        from ctlrm.runtime.paths import validate_path_component
+
+        validate_path_component(revision, label="recovery revision", max_length=128)
+        record = read_record(
+            self.area.runtime / "sessions" / session["id"] / "recovery" / f"{revision}.json"
+        )
+        profile = ProviderProfile.model_validate(session["profile"]).checked()
+        if not isinstance(record.get("native_id"), str):
+            raise ValueError("native session ID must be a UUID string")
+        UUID(record["native_id"])
+        expected = {
+            "schema_version": 1,
+            "area_id": self.area.data["id"],
+            "session_id": session["id"],
+            "generation": session["generation"],
+            "root": str(self.area.root),
+            "executable": profile.executable,
+            "context": profile.context,
+            "required_environment": profile.required_environment,
+            "resume_argv": profile.command(record["native_id"], "", resume=True),
+        }
+        if any(record.get(key) != value for key, value in expected.items()):
+            raise ValueError("recovery revision does not match the authoritative profile/area")
+        if session.get("native_id") and session["native_id"] != record["native_id"]:
+            raise ValueError("native session ID changed during resume")
+        self.area.room.read_signature(session["participant"])
+        if session["status"] == "spawning":
+            session["identity"] = self.terminal.adopt(session["spec"])
+        session.update(
+            native_id=record["native_id"],
+            recovery=record,
+            recoveries=0,
+            ready=True,
+            status="reconciling" if session["recovering"] else "ready",
+            error=None,
+        )
+        if session["recovering"]:
+            work = session["work"]
+            session["reconciliation"] = message(
                 session["participant"],
-                "prompt",
-                f"Work ID: {work_id}\nAcknowledge this work ID before acting.\n\n{text}",
+                "reconcile",
+                f"Reconcile work ID {work['id']} from its persisted mailbox. Report completed, not_started, "
+                "in_progress (explicit continuation), or uncertain using session disposition. Do not replay effects blindly.",
             )
-            session["work"] = {
-                "id": work_id,
-                "message": outbound,
-                "status": "pending",
-                "generation": session["generation"],
-            }
-            return
-        if kind in {"acknowledge", "disposition"}:
-            work = session.get("work")
-            if not work or work["id"] != payload.get("work_id"):
-                raise ValueError("unknown or inactive work ID")
-            if not session["ready"]:
-                raise ValueError("session must acknowledge recovery before work")
-            if kind == "acknowledge":
-                if session["recovering"]:
-                    raise ValueError("reconcile recovered work before acknowledging continuation")
-                if work["status"] == "completed":
-                    raise ValueError("completed work cannot be acknowledged for new action")
-                work.update(status="acknowledged", generation=session["generation"])
-                return
-            disposition = payload.get("status")
-            if disposition not in {"completed", "not_started", "in_progress", "uncertain"}:
-                raise ValueError("unknown recovery disposition")
+
+    def _prompt(self, payload: dict) -> None:
+        """Assign one standalone prompt to a ready session."""
+        session = self._session(payload)
+        if self.area.data["mode"] != "standalone":
+            raise ValueError("workflow sessions receive work only from the workflow scheduler")
+        if session.get("work") and session["work"]["status"] != "completed":
+            raise ValueError("the previous prompt still needs completion or reconciliation")
+        if not session["ready"] or session["status"] != "ready":
+            raise ValueError("session is not ready")
+        text = payload.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("prompt must contain text")
+        if len(text.encode()) > 65536:
+            raise ValueError("prompt exceeds 65536 bytes")
+        work_id = identifier("work")
+        outbound = message(
+            session["participant"],
+            "prompt",
+            f"Work ID: {work_id}\nAcknowledge this work ID before acting.\n\n{text}",
+        )
+        session["work"] = {
+            "id": work_id,
+            "message": outbound,
+            "status": "pending",
+            "generation": session["generation"],
+        }
+
+    def _stop(self, payload: dict) -> None:
+        """Plan an explicit stop without restarting or completing assigned work."""
+        session = self._session(payload, generation="generation" in payload)
+        self._interrupt_interactions(session)
+        session.update(stopped=True, ready=False, status="stopping")
+
+    def _work_status(self, payload: dict, *, kind: str) -> None:
+        """Acknowledge or reconcile the exact work assigned to this generation."""
+        session = self._session(payload)
+        work = session.get("work")
+        if not work or work["id"] != payload.get("work_id"):
+            raise ValueError("unknown or inactive work ID")
+        if not session["ready"]:
+            raise ValueError("session must acknowledge recovery before work")
+        if kind == "acknowledge":
+            if session["recovering"]:
+                raise ValueError("reconcile recovered work before acknowledging continuation")
             if work["status"] == "completed":
-                if disposition != "completed":
-                    raise ValueError("completed work cannot be reopened")
-                return
-            if disposition == "completed":
-                if work["status"] == "pending" and not session["recovering"]:
-                    raise ValueError("acknowledge work before reporting completion")
-                work["status"] = "completed"
-            elif disposition == "not_started":
-                if not session["recovering"]:
-                    raise ValueError("not_started is only valid during recovery reconciliation")
-                work["status"] = "pending"
-            elif disposition == "in_progress":
-                work["status"] = "acknowledged"
-            else:
-                session.update(status="blocked", error="work disposition is uncertain")
-                return
-            session.update(recovering=False, status="ready", error=None)
-            session.pop("reconciliation", None)
+                raise ValueError("completed work cannot be acknowledged for new action")
+            work.update(status="acknowledged", generation=session["generation"])
             return
-        if kind == "stop":
-            self._interrupt_interactions(session)
-            session.update(stopped=True, ready=False, status="stopping")
+        disposition = payload.get("status")
+        if disposition not in {"completed", "not_started", "in_progress", "uncertain"}:
+            raise ValueError("unknown recovery disposition")
+        if work["status"] == "completed":
+            if disposition != "completed":
+                raise ValueError("completed work cannot be reopened")
             return
-        if kind in {"resume", "replace"}:
-            if not session.get("identity") and self.terminal.exists(session["spec"]):
-                raise ValueError("stop and reconcile the existing terminal before replacement")
-            if (
-                session.get("identity")
-                and self.terminal.health(session["spec"], session["identity"]) == "running"
-            ):
-                raise ValueError("stop the live session before resume or replacement")
-            self._plan_restart(session, resume=kind == "resume", reset_counter=True)
+        if disposition == "completed":
+            if work["status"] == "pending" and not session["recovering"]:
+                raise ValueError("acknowledge work before reporting completion")
+            work["status"] = "completed"
+        elif disposition == "not_started":
+            if not session["recovering"]:
+                raise ValueError("not_started is only valid during recovery reconciliation")
+            work["status"] = "pending"
+        elif disposition == "in_progress":
+            work["status"] = "acknowledged"
+        else:
+            session.update(status="blocked", error="work disposition is uncertain")
             return
-        raise ValueError(f"unknown request kind: {kind}")
+        session.update(recovering=False, status="ready", error=None)
+        session.pop("reconciliation", None)
+
+    def _restart(self, payload: dict, *, resume: bool) -> None:
+        """Restart only after proving the old terminal is no longer running."""
+        session = self._session(payload, generation="generation" in payload)
+        if not session.get("identity") and self.terminal.exists(session["spec"]):
+            raise ValueError("stop and reconcile the existing terminal before replacement")
+        if (
+            session.get("identity")
+            and self.terminal.health(session["spec"], session["identity"]) == "running"
+        ):
+            raise ValueError("stop the live session before resume or replacement")
+        self._plan_restart(session, resume=resume, reset_counter=True)
+
+    def _conversation(self, payload: dict, *, kind: str) -> None:
+        """Validate the generation before changing its conversation input queue."""
+        session = self._session(payload)
+        self._interaction(session, kind, payload)
 
     def _interrupt_interactions(self, session: dict, *, replace: bool = False) -> None:
         """Retain interrupted messages as evidence; never replay their possible effects."""
@@ -481,15 +527,6 @@ class SessionEngine:
         for request in requests:
             before = copy.deepcopy(self.state)
             try:
-                if self.state["paused"] and request["kind"] not in {
-                    "reconcile-area",
-                    "supervisor-stop",
-                    "stop",
-                    "workflow-cancel",
-                }:
-                    raise ValueError(
-                        "area is paused; explicitly reconcile after restoring its identity"
-                    )
                 self.apply(request["kind"], request["payload"])
                 result = {"status": "accepted"}
             except (ValueError, KeyError, TypeError, OSError, RuntimeError) as error:

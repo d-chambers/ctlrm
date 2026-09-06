@@ -14,7 +14,7 @@ from uuid import uuid4
 from ctlrm.runtime.filesystem import mkdir_shared
 from ctlrm.runtime.location import runtime_path
 from ctlrm.runtime.paths import validate_path_component
-from ctlrm.runtime.room import _write_exclusive_atomic
+from ctlrm.runtime.filesystem import write_exclusive_atomic
 
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 
@@ -80,7 +80,7 @@ def publish(path: Path, value: dict) -> None:
         raise ValueError("record too large")
     mkdir_shared(path.parent)
     try:
-        _write_exclusive_atomic(path, text)
+        write_exclusive_atomic(path, text)
     except FileExistsError:
         if read_record(path) != value:
             raise ValueError(f"immutable record conflict: {path}")

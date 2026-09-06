@@ -2,56 +2,15 @@
 
 from __future__ import annotations
 
-import errno
-import os
-import tempfile
 from dataclasses import dataclass
 from collections.abc import Callable
 from pathlib import Path
 
-from ctlrm.runtime.filesystem import mkdir_shared as _mkdir_shared
+from ctlrm.runtime.filesystem import mkdir_shared, write_exclusive_atomic
 from ctlrm.runtime.manifest import RoomManifest
 from ctlrm.runtime.location import runtime_path
 from ctlrm.runtime.messages import MailboxMessage
 from ctlrm.runtime.participants import ParticipantSignature, validate_participant_id
-
-_FILE_MODE = 0o660
-_UNSUPPORTED_LINK_ERRNOS = {errno.EPERM, errno.EXDEV, errno.EOPNOTSUPP}
-
-
-def _write_exclusive_atomic(path: Path, text: str) -> None:
-    """Atomically create a file without replacing an existing owner."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            delete=False,
-            encoding="utf-8",
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            os.fchmod(temporary.fileno(), _FILE_MODE)
-            temporary.write(text)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        try:
-            os.link(temporary_path, path)
-        except OSError as exc:
-            if exc.errno == errno.EEXIST:
-                raise FileExistsError(errno.EEXIST, "record already exists", str(path)) from exc
-            if exc.errno in _UNSUPPORTED_LINK_ERRNOS:
-                raise RuntimeError("room storage must support atomic hard links") from exc
-            raise
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True)
@@ -90,16 +49,16 @@ class RoomRuntime:
             raise NotADirectoryError(f"project root must already exist: {self.project_root}")
         if self.root != self.project_root / ".ctlrm" and not (self.root / "area.yaml").exists():
             raise ValueError("central rooms must be initialized through job start")
-        _mkdir_shared(self.root)
-        _mkdir_shared(self.root / "participants")
+        mkdir_shared(self.root)
+        mkdir_shared(self.root / "participants")
 
     def init_participant(self, participant_id: str) -> None:
         """Create the inbox directory for one safe participant identifier."""
         validate_participant_id(participant_id)
         inbox = self.root / "participants" / participant_id / "inbox"
         self.init_project()
-        _mkdir_shared(inbox.parent)
-        _mkdir_shared(inbox)
+        mkdir_shared(inbox.parent)
+        mkdir_shared(inbox)
 
     @property
     def room_path(self) -> Path:
@@ -109,7 +68,7 @@ class RoomRuntime:
     def write_room(self, room: RoomManifest) -> Path:
         """Create the immutable room prompt and role roster."""
         self.init_project()
-        _write_exclusive_atomic(self.room_path, room.to_markdown())
+        write_exclusive_atomic(self.room_path, room.to_markdown())
         return self.room_path
 
     def read_room(self) -> RoomManifest:
@@ -175,8 +134,9 @@ class RoomRuntime:
         capabilities: list[str],
         joined_at: str,
         restart_command: str | None = None,
+        resume: bool = False,
     ) -> Path:
-        """Create a participant signature using the role assigned by the author."""
+        """Accept the assigned role, optionally resuming an identical signature."""
         return self._join(
             self.read_room(),
             participant_id=participant_id,
@@ -186,7 +146,7 @@ class RoomRuntime:
             capabilities=capabilities,
             joined_at=joined_at,
             restart_command=restart_command,
-            resume=False,
+            resume=resume,
         )
 
     def _join(
@@ -218,7 +178,7 @@ class RoomRuntime:
         self.init_participant(participant_id)
         path = self.signature_path(participant_id)
         try:
-            _write_exclusive_atomic(path, signature.to_yaml())
+            write_exclusive_atomic(path, signature.to_yaml())
         except FileExistsError:
             existing = self.read_signature(participant_id)
             stable_fields = {
@@ -281,7 +241,7 @@ class RoomRuntime:
         self.read_signature(message.to)
         self.init_participant(message.to)
         path = self.root / "participants" / message.to / "inbox" / f"{message.id}.md"
-        _write_exclusive_atomic(path, message.to_markdown())
+        write_exclusive_atomic(path, message.to_markdown())
         return path
 
     def read_inbox(

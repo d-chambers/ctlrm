@@ -25,19 +25,19 @@ class TestRetainedCommits:
         """Large patches are visibly truncated; binary commits remain readable as metadata."""
         sha = record(area.root, b"x" * (160 * 1024), "Large commit")
         entry = retain_commit(area, sha)
-        text = read_commit(area.room.root, area.data["id"], entry["id"])
+        text = read_commit(area.runtime, area.data["id"], entry["id"])
         assert text["truncated"] and "Display truncated" in text["text"]
         binary = record(area.root, b"\0binary\0data", "Binary commit")
         entry = retain_commit(area, binary)
-        assert "Binary files" in read_commit(area.room.root, area.data["id"], entry["id"])["text"]
+        assert "Binary files" in read_commit(area.runtime, area.data["id"], entry["id"])["text"]
         with pytest.raises(ValueError, match="identity"):
-            read_commit(area.room.root, "foreign-area", entry["id"])
+            read_commit(area.runtime, "foreign-area", entry["id"])
         with pytest.raises(ValueError, match="full Git"):
             retain_commit(area, "HEAD:change.txt")
-        path = area.room.root / "commits" / f"{entry['id']}.json"
+        path = area.runtime / "commits" / f"{entry['id']}.json"
         path.write_text(json.dumps({**text, "text": "altered"}))
         with pytest.raises(ValueError, match="identity"):
-            read_commit(area.room.root, area.data["id"], entry["id"])
+            read_commit(area.runtime, area.data["id"], entry["id"])
 
     def test_range_and_rewrite(self, area, monkeypatch) -> None:
         """Bound long ranges and label rewritten history instead of attributing unrelated commits."""
@@ -60,7 +60,7 @@ class TestRetainedCommits:
         marker = area.root / "external-ran"
         git(area.root, "config", "diff.external", f"touch {marker}")
         artifact = capture(area, "run", "execution", base_commit=sha)
-        assert read_artifact(area.room.root, area.data["id"], artifact)["head_commit"]["sha"] == sha
+        assert read_artifact(area.runtime, area.data["id"], artifact)["head_commit"]["sha"] == sha
         assert not marker.exists()
 
     def test_timeout(self, area, monkeypatch) -> None:

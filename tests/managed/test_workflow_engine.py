@@ -219,7 +219,7 @@ class TestDeliveryRecovery:
             complete(engine, client, "approved")
             execution = copy.deepcopy(engine.active())
             path = (
-                client.area.room.root
+                client.area.runtime
                 / "participants/owner/inbox"
                 / f"{execution['message']['id']}.md"
             )
@@ -442,7 +442,7 @@ class TestCounterpartBoundaries:
             payload = prepare(engine, client)
             execution = engine.active()
             path = (
-                client.area.room.root
+                client.area.runtime
                 / "participants/implementer/inbox"
                 / f"{execution['message']['id']}.md"
             )
@@ -675,7 +675,7 @@ class TestApprovalVersionRace:
             client.request("workflow-ack", payload)
             engine.tick()
             incoming = read_record(
-                client.area.room.root / "artifacts" / f"{payload['input_artifact']}.json"
+                client.area.runtime / "artifacts" / f"{payload['input_artifact']}.json"
             )
             original = artifacts.fingerprint
             observed = []
@@ -696,7 +696,7 @@ class TestApprovalVersionRace:
             assert engine.state["requests"][request]["status"] == "accepted"
             accepted = engine.state["run"]["executions"][1]
             outgoing = read_record(
-                client.area.room.root / "artifacts" / f"{accepted['artifact']}.json"
+                client.area.runtime / "artifacts" / f"{accepted['artifact']}.json"
             )
             assert incoming["version"] == outgoing["version"]
 
@@ -750,9 +750,7 @@ class TestReviewedWorkflowBoundaries:
             )
             engine.tick()
             incoming = engine.active()["input"]
-            record = read_record(
-                client.area.room.root / "artifacts" / f"{incoming['artifact']}.json"
-            )
+            record = read_record(client.area.runtime / "artifacts" / f"{incoming['artifact']}.json")
             assert incoming["execution_id"] == record["execution_id"] == payload["execution_id"]
             assert incoming["previous_execution_id"] == previous
 

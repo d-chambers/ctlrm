@@ -39,7 +39,7 @@ class TestJournal:
         """Never discard previously accepted events to get a supervisor running."""
         with area.journal.writer():
             area.journal.commit(area.journal.replay()[0], "initial")
-        path = area.room.root / "events/000000000001.json"
+        path = area.runtime / "events/000000000001.json"
         data = json.loads(path.read_text())
         data["kind"] = "tampered"
         path.write_text(json.dumps(data))
@@ -49,7 +49,7 @@ class TestJournal:
     def test_bad_request_does_not_hide_valid(self, area) -> None:
         """Incomplete spool records remain diagnosed without losing valid requests."""
         area.journal.submit("launch", {"participant": "agent"}, "good")
-        (area.room.root / "supervisor/requests/bad.json").write_text("{")
+        (area.runtime / "supervisor/requests/bad.json").write_text("{")
         requests, errors = area.journal.pending(area.journal.replay()[0])
         assert [item["id"] for item in requests] == ["good"]
         assert "bad.json" in errors[0]
@@ -69,7 +69,7 @@ class TestDeepRequest:
     def test_nested_request_is_diagnosed(self, area) -> None:
         """Excessive JSON nesting is rejected before it reaches domain transitions."""
         area.journal.submit("launch", {"participant": "agent"}, "good")
-        path = area.room.root / "supervisor/requests/deep.json"
+        path = area.runtime / "supervisor/requests/deep.json"
         path.write_text('{"payload":' + "[" * 1500 + "0" + "]" * 1500 + "}")
         requests, errors = area.journal.pending(area.journal.replay()[0])
         assert len(requests) == 1
@@ -108,9 +108,7 @@ class TestGrowingHistory:
             state["shutdown"] = True
             area.journal.commit(state, "stop")
             assert area.journal.replay()[0] == state
-        assert (
-            max(path.stat().st_size for path in (area.room.root / "events").glob("*.json")) < 16000
-        )
+        assert max(path.stat().st_size for path in (area.runtime / "events").glob("*.json")) < 16000
 
     def test_removal_and_list_update(self, area) -> None:
         """Replay supports replacement, nested edits, list truncation, and deleted fields."""

@@ -57,7 +57,7 @@ class WorkflowService(SessionService):
                 )
             profiles[key] = checked.model_dump()
         snapshot = {**template.model_dump(), "profiles": profiles}
-        if (runtime_path(root) / "area.yaml").exists():
+        if (runtime / "area.yaml").exists():
             area = Area.load(root)
             definition = area.data.get("definition") or {}
             expected = {"template": snapshot, "bindings": bindings}
@@ -144,8 +144,7 @@ class WorkflowService(SessionService):
         if os.environ.get("CTLRM_SESSION"):
             raise ValueError("managed agent sessions cannot accept a human role")
         self.area.validate()
-        self.area.room._join(
-            self.area.room.read_room(),
+        self.area.room.join_participant(
             participant_id=participant,
             name=role["name"],
             kind="human",
@@ -386,10 +385,10 @@ class WorkflowEngine(SessionEngine):
             )
             incoming["artifact"] = capture(self.area, self.state["run"]["id"], execution["id"])
             before_version = read_record(
-                self.area.room.root / "artifacts" / f"{incoming['previous_artifact']}.json"
+                self.area.runtime / "artifacts" / f"{incoming['previous_artifact']}.json"
             )["version"]
             after_version = read_record(
-                self.area.room.root / "artifacts" / f"{incoming['artifact']}.json"
+                self.area.runtime / "artifacts" / f"{incoming['artifact']}.json"
             )["version"]
             if before_version != after_version:
                 if self.template.tasks[execution["task"]].optional:
@@ -404,9 +403,9 @@ class WorkflowEngine(SessionEngine):
                 ) and any(
                     prior["outcome"] == "approved"
                     and self.template.tasks[prior["task"]].checks_input("approved")
-                    and read_record(
-                        self.area.room.root / "artifacts" / f"{prior['artifact']}.json"
-                    )["version"]
+                    and read_record(self.area.runtime / "artifacts" / f"{prior['artifact']}.json")[
+                        "version"
+                    ]
                     == before_version
                     for prior in self.state["run"]["executions"]
                 ):
@@ -529,7 +528,7 @@ class WorkflowEngine(SessionEngine):
             if self.template.tasks[execution["task"]].checks_input(outcome) and execution[
                 "input"
             ].get("artifact"):
-                captured = read_record(self.area.room.root / "artifacts" / f"{artifact}.json")
+                captured = read_record(self.area.runtime / "artifacts" / f"{artifact}.json")
                 verify(self.area, execution["input"]["artifact"], version=captured["version"])
             self.area.validate()
             execution.update(

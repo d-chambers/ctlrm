@@ -80,7 +80,7 @@ class TestProjects:
             store.start_job("auth", "clients")
         client, request = store.start_job("auth", "core")
         assert client.area.root != Path(store.project("auth").codebase)
-        assert client.area.room.root == store.job_path("auth", "core") / "runtime"
+        assert client.area.runtime == store.job_path("auth", "core") / "runtime"
         assert (client.area.root / ".scratch/ctlrm").resolve() == store.job_path("auth", "core")
         assert not (client.area.root / ".ctlrm").is_symlink()
         assert Area.load(client.area.root).data == client.area.data
@@ -369,7 +369,7 @@ class TestReviewedProjectBoundaries:
             store.assign_pr("auth", name, number, "owner/repo")
         client, _ = store.start_job("auth", "a")
         finish(client)
-        event = sorted((client.area.room.root / "events").glob("*.json"))[-1]
+        event = sorted((client.area.runtime / "events").glob("*.json"))[-1]
         event.write_text("{}")
         assert store.job_status("auth", "a")["status"] == "invalid"
         assert store.find_pr(43)[0]["job"]["id"] == "b"

@@ -168,7 +168,7 @@ class TestInitialization:
             """Unsupported link."""
             raise OSError(errno.EOPNOTSUPP, "unsupported", target)
 
-        monkeypatch.setattr("ctlrm.runtime.room.os.link", unsupported_link)
+        monkeypatch.setattr("ctlrm.runtime.filesystem.os.link", unsupported_link)
 
         with pytest.raises(RuntimeError, match="must support atomic hard links"):
             runtime.write_room(room())

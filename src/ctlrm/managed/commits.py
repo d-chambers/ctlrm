@@ -73,7 +73,7 @@ def retain_commit(area: Area, sha: str) -> dict:
         "truncated": truncated,
     }
     reference = "commit-" + digest(record)
-    publish(area.room.root / "commits" / f"{reference}.json", record)
+    publish(area.runtime / "commits" / f"{reference}.json", record)
     return {"id": reference, "sha": sha, "title": record["title"], "truncated": truncated}
 
 

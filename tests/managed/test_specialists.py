@@ -261,7 +261,7 @@ class TestSpecialistVersionRetry:
             engine.tick()
             assert "Review records directory: .ctlrm/reviews" in engine.active()["message"]["body"]
             before = fingerprint(repository)
-            reviews = client.area.room.root / "reviews"
+            reviews = client.area.runtime / "reviews"
             reviews.mkdir()
             (reviews / "findings.md").write_text("No findings.\n")
             assert fingerprint(repository) == before

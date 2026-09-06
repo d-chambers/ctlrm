@@ -84,7 +84,7 @@ class Workbench:
         if not path.exists():
             raise ValueError("start the job first")
         area = Area.load(Path(read_record(path)["root"]))
-        if area.room.root.resolve() != runtime.resolve():
+        if area.runtime.resolve() != runtime.resolve():
             raise ValueError("worktree no longer belongs to this job")
         if validate_worktree:
             area.validate()

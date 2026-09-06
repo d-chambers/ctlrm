@@ -60,7 +60,7 @@ class TestLockProbe:
     def test_probe_does_not_change_lock(self, area) -> None:
         """A status reader neither changes lock metadata nor contends for acquisition."""
         with area.journal.writer():
-            path = area.room.root / "supervisor/lock"
+            path = area.runtime / "supervisor/lock"
             original = path.stat()
             content = path.read_bytes()
             for _ in range(10):

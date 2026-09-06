@@ -13,7 +13,7 @@ from ctlrm.managed.area import Area
 from ctlrm.managed.providers import ProviderProfile
 from ctlrm.managed.storage import identifier, now, publish, read_record
 from ctlrm.runtime.messages import MailboxMessage
-from ctlrm.runtime.room import _write_exclusive_atomic
+from ctlrm.runtime.filesystem import write_exclusive_atomic
 
 
 def mailbox(area: Area, participant: str, message: dict) -> None:
@@ -21,11 +21,11 @@ def mailbox(area: Area, participant: str, message: dict) -> None:
     if participant not in {*area.data["roles"], "coordinator"}:
         raise ValueError("recipient is outside the immutable managed roster")
     item = MailboxMessage.model_validate(message)
-    path = area.room.root / "participants" / participant / "inbox" / f"{item.id}.md"
+    path = area.runtime / "participants" / participant / "inbox" / f"{item.id}.md"
     if not path.exists():
         area.room.init_participant(participant)
         try:
-            _write_exclusive_atomic(path, item.to_markdown())
+            write_exclusive_atomic(path, item.to_markdown())
         except FileExistsError:
             pass
     if MailboxMessage.read(path) != MailboxMessage.parse(item.to_markdown()):
@@ -115,8 +115,7 @@ class SessionService:
         profile = ProviderProfile.model_validate(session["profile"]).checked()
         participant = session["participant"]
         role = self.area.data["roles"][participant]
-        self.area.room._join(
-            self.area.room.read_room(),
+        self.area.room.join_participant(
             participant_id=participant,
             name=role["name"],
             kind="agent",
@@ -141,7 +140,7 @@ class SessionService:
         }
         record_id = identifier("recovery")
         publish(
-            self.area.room.root / "sessions" / session_id / "recovery" / f"{record_id}.json", record
+            self.area.runtime / "sessions" / session_id / "recovery" / f"{record_id}.json", record
         )
         return self.request(
             "ready", {"session_id": session_id, "generation": generation, "revision": record_id}
@@ -284,7 +283,7 @@ class SessionEngine:
 
             validate_path_component(revision, label="recovery revision", max_length=128)
             record = read_record(
-                self.area.room.root / "sessions" / session["id"] / "recovery" / f"{revision}.json"
+                self.area.runtime / "sessions" / session["id"] / "recovery" / f"{revision}.json"
             )
             profile = ProviderProfile.model_validate(session["profile"]).checked()
             if not isinstance(record.get("native_id"), str):
@@ -541,7 +540,7 @@ class SessionEngine:
             if self.terminal.exists(spec):
                 raise ValueError("terminal name occupied before launch; refusing adoption")
             publish(
-                self.area.room.root
+                self.area.runtime
                 / "sessions"
                 / session["id"]
                 / f"launch-{session['generation']}.json",
@@ -594,7 +593,7 @@ class SessionEngine:
                     return
                 if profile.input_mode == "native":
                     publish(
-                        self.area.room.root
+                        self.area.runtime
                         / "sessions"
                         / session["id"]
                         / f"input-{session['generation']}"

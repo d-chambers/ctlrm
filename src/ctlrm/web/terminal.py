@@ -1,6 +1,7 @@
 """A browser terminal attaches a disposable PTY client to a verified managed tmux session."""
 
 import asyncio
+import anyio
 import fcntl
 import json
 import os
@@ -130,19 +131,22 @@ async def bridge(
             task.result()
         await socket.close(code=1000, reason="terminal detached")
     finally:
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        if process is not None and process.poll() is None:
-            process.terminate()
-            try:
-                await asyncio.to_thread(process.wait, timeout=2)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                await asyncio.to_thread(process.wait)
-        os.close(master)
-        if slave >= 0:
-            os.close(slave)
+        # ASGI cancellation must not interrupt cleanup of the owned attachment.
+        with anyio.CancelScope(shield=True):
+            for task in tasks:
+                task.cancel()
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    await asyncio.to_thread(process.wait, timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    await asyncio.to_thread(process.wait)
+            # Stop the child before joining readers that may still be draining its PTY.
+            await asyncio.gather(*tasks, return_exceptions=True)
+            os.close(master)
+            if slave >= 0:
+                os.close(slave)
 
 
 def main() -> None:

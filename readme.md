@@ -30,6 +30,10 @@ The OS-specific user data directory owns durable project and job records. Each j
 
 Use Linux, Python 3.11 or newer, tmux 3.2a or newer, and local POSIX storage. `libtmux` 0.62.x is installed with the package. Install and authenticate the provider CLIs separately. Run `uv sync`, then `uv run ctlrm --help`. Run checks with `uv run pytest --cov ctlrm --cov-report term-missing`, `uv run ruff check .`, `uv run ruff format --check .`, and `uvx prek run --all-files`. Browser assets are packaged locally. After editing frontend source, run `npm --prefix frontend ci`, `npm --prefix frontend run build`, and `npm --prefix frontend run check`; `npm --prefix frontend run format` formats authored assets. Node is needed for frontend development, not to run the installed workbench.
 
+## Releases
+
+CI checks pull requests and `main` on Python 3.11 and 3.14. Publishing a GitHub release runs those checks again and uploads the tested packages to PyPI through Trusted Publishing. See [release setup and versioning](docs/releases.md), including the one-time PyPI account configuration.
+
 ## Managed sessions and workflows
 
 ```sh

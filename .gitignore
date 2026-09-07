@@ -6,7 +6,8 @@
 .ruff_cache/
 __pycache__/
 *.py[cod]
-.scratch/
+# Local coordination data, including a .scratch symlink.
+.scratch
 .coverage*
 htmlcov/
 dist/

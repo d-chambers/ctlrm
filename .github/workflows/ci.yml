@@ -1,15 +1,74 @@
 name: checks
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.11'
+      - name: Validate release tag
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?$ ]]
+          git merge-base --is-ancestor HEAD origin/main
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - name: Verify release package version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python - <<'PYTHON'
+          import email
+          import os
+          import pathlib
+          import zipfile
+
+          wheel, = pathlib.Path("dist").glob("*.whl")
+          with zipfile.ZipFile(wheel) as archive:
+              metadata_path, = (name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+              metadata = email.message_from_bytes(archive.read(metadata_path))
+          if metadata["Name"] != "ctlrm" or "v" + metadata["Version"] != os.environ["RELEASE_TAG"]:
+              raise SystemExit("Package name/version does not match the release tag")
+          PYTHON
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false
       matrix:
         python: ['3.11', '3.14']
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: ${{ matrix.python }}
@@ -31,8 +90,11 @@ jobs:
         run: npm --prefix frontend exec -- playwright install --with-deps chromium --only-shell
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run pytest --cov ctlrm --cov-report term-missing --durations=25 --junitxml=test-results/python.xml
-      - run: uv build
+      - run: uv run pytest --cov ctlrm --cov-report term-missing --cov-report xml:test-results/coverage.xml --durations=25 --junitxml=test-results/python.xml
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: dist
       - name: Test installed wheel outside source tree
         run: |
           uv venv --python '${{ matrix.python }}' /tmp/ctlrm-wheel
@@ -53,3 +115,4 @@ jobs:
             test-results/
             frontend/test-results/
           if-no-files-found: ignore
+          retention-days: 7

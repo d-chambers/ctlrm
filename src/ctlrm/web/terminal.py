@@ -2,6 +2,7 @@
 
 import asyncio
 import anyio
+import errno
 import fcntl
 import json
 import os
@@ -85,6 +86,10 @@ async def bridge(
                 except BlockingIOError:
                     await asyncio.sleep(0.02)
                     continue
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        return  # The last PTY slave closed between poll() and read().
+                    raise
                 if not data:
                     return
                 await asyncio.wait_for(socket.send_bytes(data), 5)

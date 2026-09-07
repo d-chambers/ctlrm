@@ -172,6 +172,12 @@ class ProjectStore:
 
     def job_status(self, project_id: str, job_id: str) -> dict:
         """Derive task/session progress from the job journal, including removed worktrees."""
+        return self._job_status(
+            project_id, job_id, self.journal(project_id).replay()[0].get("pull_requests", {})
+        )
+
+    def _job_status(self, project_id: str, job_id: str, pull_requests: dict) -> dict:
+        """Build one job projection using the caller's already validated project PR records."""
         job = self.job(project_id, job_id)
         path = self.job_path(project_id, job_id)
         launch = read_record(path / "launch.json") if (path / "launch.json").exists() else None
@@ -183,7 +189,7 @@ class ProjectStore:
                 "launch": launch,
                 "status": "invalid",
                 "error": str(error),
-                "pr": self.journal(project_id).replay()[0].get("pull_requests", {}).get(job_id),
+                "pr": pull_requests.get(job_id),
                 "run": None,
                 "sessions": {},
                 "paused": str(error),
@@ -193,10 +199,7 @@ class ProjectStore:
             "job": job.model_dump(),
             "launch": launch,
             "status": run["status"] if run else ("starting" if launch else "planned"),
-            "pr": self.journal(project_id)
-            .replay()[0]
-            .get("pull_requests", {})
-            .get(job_id, state.get("pr")),
+            "pr": pull_requests.get(job_id, state.get("pr")),
             "run": run,
             "sessions": state["sessions"],
             "paused": state.get("paused"),
@@ -209,7 +212,9 @@ class ProjectStore:
         jobs = []
         for path in sorted((self.project_path(project_id) / "jobs").glob("*/job.json")):
             try:
-                jobs.append(self.job_status(project_id, path.parent.name))
+                jobs.append(
+                    self._job_status(project_id, path.parent.name, state.get("pull_requests", {}))
+                )
             except (ValueError, OSError, KeyError, TypeError) as error:
                 jobs.append(
                     {

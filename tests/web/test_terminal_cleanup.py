@@ -1,6 +1,7 @@
 """Cancellation must release the browser attachment process and PTY descriptors."""
 
 import asyncio
+import errno
 from contextlib import suppress
 import os
 import sys
@@ -98,3 +99,84 @@ class TestCanceledAttachment:
             for descriptor in descriptors:
                 with suppress(OSError):
                     os.close(descriptor)
+
+
+class TestDetachedAttachment:
+    """PTY EOF is a normal detach even when it races the child's liveness check."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "error_number", [errno.EIO, errno.EBADF], ids=["eio-eof", "unexpected-error"]
+    )
+    async def test_read_race(self, monkeypatch, error_number) -> None:
+        """Only EIO is treated as EOF; other descriptor failures still propagate after cleanup."""
+        descriptors = []
+        original_openpty, original_read = bridge_module.pty.openpty, os.read
+
+        def openpty():
+            """Use real descriptors while controlling the process-poll race."""
+            pair = original_openpty()
+            descriptors.extend(pair)
+            return pair
+
+        def read(descriptor, size):
+            """Model the slave closing immediately after a successful poll."""
+            if descriptors and descriptor == descriptors[0]:
+                raise OSError(error_number, "injected descriptor error")
+            return original_read(descriptor, size)
+
+        class Process:
+            """Keep poll live until the bridge cleans up its own attachment."""
+
+            stopped = False
+
+            def poll(self):
+                """Expose the state before and after cleanup."""
+                return 0 if self.stopped else None
+
+            def terminate(self):
+                """Record termination without touching any real agent."""
+                self.stopped = True
+
+            def wait(self, timeout=None):
+                """Finish immediately once the fake attachment has stopped."""
+                assert self.stopped
+                return 0
+
+        class Socket:
+            """Keep input pending while recording the bridge's close status."""
+
+            closed = None
+
+            async def receive_text(self):
+                """Let output determine when this attachment ends."""
+                await asyncio.Event().wait()
+
+            async def close(self, **kwargs):
+                """Record the public WebSocket close code and reason."""
+                self.closed = kwargs
+
+        process, socket = Process(), Socket()
+        terminal = SimpleNamespace(attach_command=lambda *args, **kwargs: ["unused"])
+        workbench = SimpleNamespace(
+            session=lambda *args: (
+                SimpleNamespace(data={"id": "test"}),
+                {"profile": {"input_mode": "manual"}, "spec": {}, "identity": {}},
+            )
+        )
+        monkeypatch.setattr(bridge_module.pty, "openpty", openpty)
+        monkeypatch.setattr(bridge_module.os, "read", read)
+        monkeypatch.setattr(bridge_module.subprocess, "Popen", lambda *args, **kwargs: process)
+        monkeypatch.setattr(bridge_module, "TmuxTerminal", lambda area_id: terminal)
+        if error_number == errno.EIO:
+            await bridge_module.bridge(socket, workbench, "p", "j", "s", 1)
+            assert socket.closed == {"code": 1000, "reason": "terminal detached"}
+        else:
+            with pytest.raises(OSError) as caught:
+                await bridge_module.bridge(socket, workbench, "p", "j", "s", 1)
+            assert caught.value.errno == error_number
+            assert socket.closed is None
+        assert process.stopped
+        for descriptor in descriptors:
+            with pytest.raises(OSError):
+                os.fstat(descriptor)

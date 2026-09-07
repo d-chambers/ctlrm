@@ -1,6 +1,7 @@
 """Conversation input is serialized and cannot silently replay interrupted effects."""
 
 import copy
+import json
 
 import pytest
 
@@ -170,3 +171,82 @@ class TestNativeInteractions:
         engine.tick()
         assert engine.state["requests"][request]["status"] == "rejected"
         assert engine.state["sessions"][session_id]["interactions"][0]["status"] == "queued"
+
+    def test_host_stop_during_turn(self, native, monkeypatch, capsys) -> None:
+        """The native host exits cleanly when a late completion loses to an accepted stop."""
+        import ctlrm.managed.codex_host as host
+
+        engine, client, session_id, loop = native
+        client.request("interact", {"session_id": session_id, "generation": 1, "text": "Hello"})
+        engine.tick()
+        attempts = []
+
+        def turn(executable, arguments, native_id, prompt):
+            """Stop after the durable claim but before the provider reports completion."""
+            if prompt != "bootstrap":
+                attempts.append(prompt)
+                client.request("stop", {"session_id": session_id, "generation": 1})
+                engine.tick()
+            return loop.native_id
+
+        config = {**loop.config, "native_id": loop.native_id, "bootstrap": "bootstrap"}
+        monkeypatch.setattr(host.sys, "argv", ["codex_host", json.dumps(config)])
+        for key, value in {
+            "CTLRM_ROOT": str(client.area.root),
+            "CTLRM_SESSION": session_id,
+            "CTLRM_GENERATION": "1",
+            "CTLRM_LAUNCH_TOKEN": loop.token,
+        }.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setattr(host, "turn", turn)
+        monkeypatch.setattr(host, "InputLoop", lambda *args: loop)
+        host.main()
+        assert attempts == ["Hello"]
+        current = engine.journal.replay()[0]["sessions"][session_id]
+        assert current["status"] == "stopped"
+        assert current["interactions"][0]["status"] == "uncertain"
+        assert "Codex session ended:" in capsys.readouterr().out
+
+    def test_finish_while_stopping(self, native, monkeypatch, capsys) -> None:
+        """A slow stop keeps uncertain evidence without crashing or replaying the claimed turn."""
+        from ctlrm.communication.terminal import StopPending
+
+        engine, client, session_id, loop = native
+
+        def pending_stop(*args):
+            """Keep the owned process in its committed stopping state."""
+            raise StopPending("waiting for the provider to exit")
+
+        def turn(executable, arguments, native_id, prompt):
+            """Request a stop after the provider has claimed the interaction."""
+            client.request("stop", {"session_id": session_id})
+            engine.tick()
+            return native_id
+
+        monkeypatch.setattr(engine.terminal, "stop", pending_stop)
+        monkeypatch.setattr("ctlrm.managed.codex_host.turn", turn)
+        client.request("interact", {"session_id": session_id, "generation": 1, "text": "Hello"})
+        engine.tick()
+        assert loop.poll()
+        assert not loop.poll()
+        current = engine.journal.replay()[0]["sessions"][session_id]
+        assert current["status"] == "stopping"
+        assert current["interactions"][0]["status"] == "uncertain"
+        assert "Conversation message interrupted:" in capsys.readouterr().out
+
+    def test_unexpected_finish_rejection(self, native, monkeypatch) -> None:
+        """An unrelated rejection must remain visible, rather than masquerading as a normal stop."""
+        engine, client, session_id, loop = native
+
+        def turn(executable, arguments, native_id, prompt):
+            """Pause dispatch while the provider is working without retiring its generation."""
+            engine.state["paused"] = "test pause"
+            engine.commit("test-pause")
+            return native_id
+
+        monkeypatch.setattr("ctlrm.managed.codex_host.turn", turn)
+        client.request("interact", {"session_id": session_id, "generation": 1, "text": "Hello"})
+        engine.tick()
+        with pytest.raises(ValueError, match="area is paused"):
+            loop.poll()
+        assert engine.state["sessions"][session_id]["interactions"][0]["status"] == "running"

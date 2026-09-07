@@ -1287,7 +1287,12 @@ window.addEventListener("beforeunload", () => {
 });
 render();
 refresh();
-setInterval(refresh, 2500);
+setInterval(() => {
+  if (!document.hidden) refresh();
+}, 2500);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) refresh();
+});
 // A newly printed server URL may open in this already-running browser tab.
 window.addEventListener("hashchange", () => {
   const token = new URLSearchParams(location.hash.slice(1)).get("token");

@@ -153,3 +153,26 @@ class TestTaskArtifacts:
         url = BASE + f"/executions/{action['active']['id']}/artifacts/message/cli-note"
         assert "Full CLI body" in client.get(url).json()["text"]
         assert "sent_messages" not in client.get("/api/snapshot").text
+
+
+class TestMessageRecovery:
+    """A restart repairs missing delivery and diagnoses conflicting immutable mailbox content."""
+
+    def test_repair_and_conflict(self, planned) -> None:
+        """A durable delivered flag cannot replace checking the actual recipient record."""
+        from ctlrm.managed.workflows import WorkflowEngine
+
+        _, _, first, _, service = start(planned)
+        service.send_message(message(), first["active"]["id"])
+        path = service.area.runtime / "participants/coordinator/inbox/note.md"
+        original = path.read_bytes()
+        path.unlink()
+        with service.area.journal.writer():
+            assert WorkflowEngine(service.area).tick() == []
+        assert path.read_bytes() == original
+        damaged = original.replace(b"First line", b"Wrong text")
+        path.write_bytes(damaged)
+        with service.area.journal.writer():
+            errors = WorkflowEngine(service.area).tick()
+        assert any("conflicting managed mailbox record" in error for error in errors)
+        assert path.read_bytes() == damaged

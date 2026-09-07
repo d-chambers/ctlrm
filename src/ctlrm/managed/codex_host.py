@@ -44,6 +44,10 @@ def turn(executable: str, arguments: list[str], native_id: str | None, prompt: s
             process.wait()
 
 
+class SessionEnded(ValueError):
+    """This native runner no longer owns an active session generation."""
+
+
 class InputLoop:
     """Retry native hints until committed acknowledgment, with bounded wake frequency."""
 
@@ -71,11 +75,9 @@ class InputLoop:
     def poll(self) -> bool:
         """Deliver only the currently pending logical hint; rejected acks remain retryable."""
         state = self.journal.replay()[0]
+        session = self._current(state)
         if state["paused"] or state["shutdown"]:
             return False
-        session = state["sessions"][self.session_id]
-        if session["generation"] != self.generation:
-            raise ValueError("native runner generation is no longer current")
         outbound = pending_message(session)
         if not session["ready"] and session["status"] in {"starting", "spawning"}:
             message_id = "bootstrap"
@@ -105,6 +107,15 @@ class InputLoop:
         self.attempted[message_id] = self.clock()
         return True
 
+    def _current(self, state: dict) -> dict:
+        """Distinguish normal ownership loss from corrupt state or unexpected request errors."""
+        session = state["sessions"].get(self.session_id)
+        if not session or session["generation"] != self.generation:
+            raise SessionEnded("native runner generation is no longer current")
+        if session["status"] == "stopped" or state.get("retired"):
+            raise SessionEnded("native session has stopped")
+        return session
+
     def interact(self, session: dict) -> bool:
         """Claim one message before resuming the same thread, without automatic replay."""
         if not session["ready"] or session["status"] != "ready" or session["recovering"]:
@@ -120,8 +131,8 @@ class InputLoop:
             "token": self.token,
             "interaction_id": item["id"],
         }
-        request = self.service.request("interaction-start", payload)
         try:
+            request = self.service.request("interaction-start", payload)
             self.service.await_result(request)
         except ValueError:
             # A newly routed assignment can win the race for this idle turn.
@@ -134,10 +145,17 @@ class InputLoop:
         except (ValueError, RuntimeError, OSError) as failure:
             status, error = "uncertain", str(failure)[:2048]
             print(f"Conversation message interrupted: {error}", flush=True)
-        request = self.service.request(
-            "interaction-finish", {**payload, "status": status, "error": error}
-        )
-        self.service.await_result(request)
+        try:
+            request = self.service.request(
+                "interaction-finish", {**payload, "status": status, "error": error}
+            )
+            self.service.await_result(request)
+        except ValueError as failure:
+            current = self._current(self.journal.replay()[0])
+            latest = next(i for i in current["interactions"] if i["id"] == item["id"])
+            if latest["status"] not in {"uncertain", "canceled"}:
+                raise
+            print(f"Conversation message interrupted: {failure}", flush=True)
         return True
 
 
@@ -157,9 +175,12 @@ def main() -> None:
         native_id,
     )
     print("Codex is waiting for a durable mailbox assignment.", flush=True)
-    while True:
-        inputs.poll()
-        time.sleep(0.5)
+    try:
+        while True:
+            inputs.poll()
+            time.sleep(0.5)
+    except SessionEnded as error:
+        print(f"Codex session ended: {error}", flush=True)
 
 
 if __name__ == "__main__":

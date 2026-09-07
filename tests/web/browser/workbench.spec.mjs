@@ -120,6 +120,7 @@ test("installed CLI serves the workbench and retained task text", async ({
       );
     });
 
+    await page.clock.install();
     await page.goto(url.toString());
     await page.locator('[data-action="open-project"]').first().click();
     await test.step("project and real workflow are rendered", async () => {
@@ -184,6 +185,35 @@ test("installed CLI serves the workbench and retained task text", async ({
       await expect(page.locator("#view-content")).toContainText(
         "Project artifacts",
       );
+    });
+    await test.step("hidden tabs stop polling and refresh when shown", async () => {
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
+      let snapshots = 0;
+      page.on("request", (request) => {
+        if (request.url() === `${url.origin}/api/snapshot`) snapshots++;
+      });
+      const polled = page.waitForResponse(`${url.origin}/api/snapshot`);
+      await page.clock.runFor(2600);
+      await (await polled).finished();
+      expect(snapshots).toBeGreaterThan(0);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "hidden", {
+          configurable: true,
+          value: true,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      const before = snapshots;
+      await page.clock.runFor(6000);
+      expect(snapshots).toBe(before);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "hidden", {
+          configurable: true,
+          value: false,
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await expect.poll(() => snapshots).toBeGreaterThan(before);
     });
     expect(errors).toEqual([]);
   } finally {

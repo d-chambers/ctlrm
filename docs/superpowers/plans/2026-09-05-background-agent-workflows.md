@@ -1,6 +1,6 @@
 # Background Agent Sessions and Reusable Workflows
 
-This original implementation plan is superseded by the [project/job backend plan](2026-09-05-project-jobs.md). Its completed milestones record development history; use [current workflow documentation](../../workflows.md) and `examples/` for runnable templates. Compatibility and adoption paths described here have been removed for the greenfield model.
+This original implementation plan is superseded by the [project/job backend plan](2026-09-05-project-jobs.md). Its completed milestones record development history; use [current workflow documentation](../../workflows.md) and `src/ctlrm/web/templates/` for runnable templates. Compatibility and adoption paths described here have been removed for the greenfield model.
 
 Date: 2026-09-05
 

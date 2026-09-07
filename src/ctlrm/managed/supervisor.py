@@ -1,4 +1,4 @@
-"""A detached single-writer supervisor whose lifetime is independent of CLI/TUI."""
+"""A detached single-writer supervisor whose lifetime is independent of CLI/web."""
 
 import argparse
 from contextlib import contextmanager
@@ -16,7 +16,7 @@ from ctlrm.runtime.filesystem import mkdir_shared
 
 def running(area: Area) -> bool:
     """Check the persistent lock instead of trusting a stale PID file."""
-    path = area.room.root / "supervisor/lock"
+    path = area.runtime / "supervisor/lock"
     try:
         info = path.stat()
         owner = read_record(path)
@@ -65,8 +65,8 @@ def start(area: Area, interval: float = 1) -> None:
         raise ValueError("job is retired; its runtime is read-only")
     if running(area):
         return
-    mkdir_shared(area.room.root / "supervisor/logs")
-    path = area.room.root / "supervisor/logs/supervisor.log"
+    mkdir_shared(area.runtime / "supervisor/logs")
+    path = area.runtime / "supervisor/logs/supervisor.log"
     with path.open("ab") as log:
         process = subprocess.Popen(
             [

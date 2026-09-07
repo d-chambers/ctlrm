@@ -168,7 +168,7 @@ class TestInitialization:
             """Unsupported link."""
             raise OSError(errno.EOPNOTSUPP, "unsupported", target)
 
-        monkeypatch.setattr("ctlrm.runtime.room.os.link", unsupported_link)
+        monkeypatch.setattr("ctlrm.runtime.filesystem.os.link", unsupported_link)
 
         with pytest.raises(RuntimeError, match="must support atomic hard links"):
             runtime.write_room(room())
@@ -670,10 +670,8 @@ class TestSharedDirectories:
 
     def test_shared_initialization(self, tmp_path: Path) -> None:
         """Launching first does not prevent later shared-group room access."""
-        from ctlrm.runtime import ProjectRuntime
-
-        ProjectRuntime(tmp_path).init_participant("worker")
         runtime = RoomRuntime(tmp_path)
+        runtime.init_participant("worker")
         initialize(runtime)
         assert runtime.root.stat().st_mode & 0o2770 == 0o2770
         assert (runtime.root / "participants").stat().st_mode & 0o2770 == 0o2770

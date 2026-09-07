@@ -65,6 +65,11 @@ class Area:
         self.journal = Journal(root)
         self.room = RoomRuntime(root)
 
+    @property
+    def runtime(self) -> Path:
+        """Resolve this area's standalone or central managed storage directory."""
+        return runtime_path(self.root)
+
     @classmethod
     def load(cls, path: Path) -> "Area":
         """Load an area through Git, retaining branch drift for status inspection."""
@@ -167,14 +172,14 @@ class Area:
     def ensure_room(self) -> None:
         """Recover initialization from the complete immutable area definition."""
         if self.data["mode"] == "workflow":
-            publish(self.room.root / "definition.yaml", self.data["definition"])
-            from ctlrm.runtime.room import _write_exclusive_atomic
+            publish(self.runtime / "definition.yaml", self.data["definition"])
+            from ctlrm.runtime.filesystem import write_exclusive_atomic
 
             job = self.data["definition"]["job"]
             content = f"# {job['title']}\n\n{job['instructions']}\n"
-            path = self.room.root / "job.md"
+            path = self.runtime / "job.md"
             try:
-                _write_exclusive_atomic(path, content)
+                write_exclusive_atomic(path, content)
             except FileExistsError:
                 if path.read_text() != content:
                     raise ValueError("conflicting immutable job snapshot")

@@ -191,7 +191,17 @@ class TmuxTerminal:
         session = self._session(spec)
         if session is None:
             return None
-        if self._identity(spec, session) != identity:
+        try:
+            observed = self._identity(spec, session)
+        except (libtmux.exc.LibTmuxException, ValueError, OSError):
+            # A session can disappear after lookup. Only confirmed absence permits recovery.
+            if (
+                self._session(spec) is None
+                and process_identity(identity["host_pid"]) != identity["host"]
+            ):
+                return None
+            raise
+        if observed != identity:
             raise ValueError("terminal identity changed; refusing to adopt or stop it")
         return session
 
@@ -256,18 +266,27 @@ class TmuxTerminal:
         return "\n".join(session.panes[0].capture_pane(start=-200) or [])
 
     @_translate_errors
-    def attach(self, spec: dict, identity: dict) -> None:
-        """Attach the interactive client through libtmux to a verified session."""
+    def attach_command(self, spec: dict, identity: dict, *, readonly: bool = False) -> list[str]:
+        """Build an interactive client command only after verifying the owned generation."""
         session = self._verified(spec, identity)
         if session is None:
             raise ValueError("terminal is missing")
-        # libtmux 0.62 captures stdout/stderr, which prevents interactive attachment.
-        # Lifecycle and target verification remain library-owned; this is the native UI client.
+        # libtmux captures stdio; native attachment needs a caller-owned terminal or PTY.
         binary = self.server.tmux_bin or shutil.which("tmux")
         if not binary:
             raise RuntimeError("tmux executable is missing")
-        result = subprocess.run(
-            [binary, "-S", identity["socket_path"], "attach-session", "-t", session.session_id]
-        )
+        return [
+            binary,
+            "-S",
+            identity["socket_path"],
+            "attach-session",
+            *(["-f", "read-only"] if readonly else []),
+            "-t",
+            session.session_id,
+        ]
+
+    def attach(self, spec: dict, identity: dict) -> None:
+        """Attach the interactive client through a verified libtmux session."""
+        result = subprocess.run(self.attach_command(spec, identity))
         if result.returncode:
             raise RuntimeError(f"interactive tmux client exited with status {result.returncode}")

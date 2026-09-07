@@ -1,11 +1,19 @@
 .ctlrm/
 .superpowers/
 .venv/
+.venv-*/
 .pytest_cache/
 .ruff_cache/
 __pycache__/
 *.py[cod]
-.scratch/
+# Local coordination data, including a .scratch symlink.
+.scratch
 .coverage*
 htmlcov/
 dist/
+
+frontend/node_modules/
+
+frontend/test-results/
+frontend/playwright-report/
+/test-results/

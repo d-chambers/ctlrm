@@ -147,6 +147,25 @@ def prompt(
     _run(action)
 
 
+@session_app.command("interact")
+def interact(
+    ctx: typer.Context,
+    session_id: Annotated[str, typer.Option()],
+    generation: Annotated[int, typer.Option()],
+    text: Annotated[str, typer.Option()],
+    request_id: str | None = None,
+) -> None:
+    """Send conversation input to an existing native session between its turns."""
+    _run(
+        lambda: _send(
+            ctx,
+            "interact",
+            {"session_id": session_id, "generation": generation, "text": text},
+            request_id,
+        )
+    )
+
+
 @session_app.command("acknowledge")
 def acknowledge(
     ctx: typer.Context,
@@ -235,7 +254,7 @@ def attach(ctx: typer.Context, session_id: Annotated[str, typer.Option()]) -> No
 
 @supervisor_app.command("start")
 def supervisor_start(ctx: typer.Context, foreground: bool = False, interval: float = 1) -> None:
-    """Start one supervisor; closing this CLI or TUI will not stop background execution."""
+    """Start one supervisor; closing this CLI or browser will not stop background execution."""
     _run(lambda: (supervisor.serve if foreground else supervisor.start)(_area(ctx), interval))
 
 

@@ -6,8 +6,7 @@
 - Keep test names short; put extra detail in the docstring when needed.
 - Add type hints for public functions/methods.
 - All functions, classes and modules must have a docstring, private code needs only something short.
-- Use NumPy-style docstrings for public APIs.
-- Add a short explanatory docstring for private objects.
+- Prefer concise explanatory docstrings. Describe parameters and return values when their behavior needs clarification.
 - Don't add newlines to markdown prose; let editors wrap.
 - coverage by `pytest --cov ctlrm --cov-report term-missing`
 - link by `uvx prek run --all-files`

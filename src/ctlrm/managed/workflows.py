@@ -1,6 +1,7 @@
 """Workflow clients and transitions using the session supervisor's single journal."""
 
 import json
+from collections.abc import Callable
 import os
 from pathlib import Path
 import shlex
@@ -11,6 +12,7 @@ from ctlrm.managed.artifacts import capture, verify
 from ctlrm.managed.sessions import SessionEngine, SessionService, mailbox, message
 from ctlrm.managed.storage import identifier, now, read_record
 from ctlrm.runtime.location import runtime_path, runtime_reference
+from ctlrm.runtime.messages import MailboxMessage
 from ctlrm.runtime.participants import validate_participant_id
 from ctlrm.runtime.paths import validate_path_component
 from ctlrm.runtime.projects import PullRequest
@@ -19,7 +21,7 @@ from ctlrm.scheduler import transition
 
 
 class WorkflowService(SessionService):
-    """Shared CLI/TUI workflow operations; clients submit, the supervisor commits."""
+    """Shared CLI/web workflow operations; clients submit, the supervisor commits."""
 
     @classmethod
     def submit(
@@ -56,7 +58,7 @@ class WorkflowService(SessionService):
                 )
             profiles[key] = checked.model_dump()
         snapshot = {**template.model_dump(), "profiles": profiles}
-        if (runtime_path(root) / "area.yaml").exists():
+        if (runtime / "area.yaml").exists():
             area = Area.load(root)
             definition = area.data.get("definition") or {}
             expected = {"template": snapshot, "bindings": bindings}
@@ -104,6 +106,34 @@ class WorkflowService(SessionService):
         request = client.request("workflow-start", {}, definition["submission_id"])
         return client, request
 
+    def send_message(self, item: MailboxMessage, execution_id: str) -> str:
+        """Submit an immutable outgoing message for an explicitly selected execution.
+
+        Parameters
+        ----------
+        item
+            Message between registered participants.
+        execution_id
+            Assignment ID received by the sender; stale visits are rejected.
+        """
+        run = self.area.journal.replay()[0].get("run") or {}
+        request = self.request(
+            "workflow-message",
+            {
+                "run_id": run.get("id"),
+                "execution_id": execution_id,
+                "participant": item.from_,
+                "session_id": os.environ.get("CTLRM_SESSION"),
+                "generation": int(os.environ.get("CTLRM_GENERATION", "0")),
+                "message": item.model_dump(
+                    by_alias=True, exclude={"created_at", "run_id", "execution_id"}
+                ),
+            },
+            request_id=item.id,
+        )
+        self.await_result(request)
+        return item.id
+
     def join(self, participant: str) -> None:
         """Explicitly accept an assigned human role without changing the roster."""
         state = self.area.journal.replay()[0]
@@ -115,8 +145,7 @@ class WorkflowService(SessionService):
         if os.environ.get("CTLRM_SESSION"):
             raise ValueError("managed agent sessions cannot accept a human role")
         self.area.validate()
-        self.area.room._join(
-            self.area.room.read_room(),
+        self.area.room.join_participant(
             participant_id=participant,
             name=role["name"],
             kind="human",
@@ -134,6 +163,7 @@ class WorkflowEngine(SessionEngine):
     def __init__(self, area: Area, terminal=None, **kwargs) -> None:
         """Load the immutable template; never reload the caller's mutable source file."""
         super().__init__(area, terminal, **kwargs)
+        self._delivered_messages: set[str] = set()
         self.definition = area.data["definition"]
         self.template = WorkflowTemplate.model_validate(self.definition["template"])
 
@@ -164,10 +194,26 @@ class WorkflowEngine(SessionEngine):
             ),
             None,
         )
+        refs = git(
+            self.area.root,
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            self.area.data["branch"],
+        )
+        head = next(
+            (
+                line.split()[1]
+                for line in refs.splitlines()
+                if line.split()[0] == self.area.data["branch"]
+            ),
+            None,
+        )
         execution = TaskExecution(
             id=identifier("execution"),
             task=destination,
             participant=self.definition["bindings"][role],
+            base_commit=head,
+            started_at=now(),
             fresh_after_native_id=previous_session["native_id"]
             if task.fresh_session and previous_session
             else None,
@@ -307,7 +353,7 @@ class WorkflowEngine(SessionEngine):
             raise ValueError("execution is waiting for assignment")
         return execution, session
 
-    def _cancel(self) -> None:
+    def _cancel(self, payload: dict) -> None:
         """Commit cancellation authority before stopping every owned provider generation."""
         run = self.state.get("run")
         if not run or run["status"] not in {"running", "blocked", "canceling"}:
@@ -315,7 +361,7 @@ class WorkflowEngine(SessionEngine):
         run.update(status="canceling", reason="waiting for owned providers to stop")
         for session in self.state["sessions"].values():
             if session["status"] not in {"stopped", "stopping"}:
-                super().apply("stop", {"session_id": session["id"]})
+                self._stop({"session_id": session["id"]})
 
     def _retry(self, payload: dict) -> None:
         """Explicitly abandon one visit, refreshing its input artifact when requested."""
@@ -340,10 +386,10 @@ class WorkflowEngine(SessionEngine):
             )
             incoming["artifact"] = capture(self.area, self.state["run"]["id"], execution["id"])
             before_version = read_record(
-                self.area.room.root / "artifacts" / f"{incoming['previous_artifact']}.json"
+                self.area.runtime / "artifacts" / f"{incoming['previous_artifact']}.json"
             )["version"]
             after_version = read_record(
-                self.area.room.root / "artifacts" / f"{incoming['artifact']}.json"
+                self.area.runtime / "artifacts" / f"{incoming['artifact']}.json"
             )["version"]
             if before_version != after_version:
                 if self.template.tasks[execution["task"]].optional:
@@ -358,9 +404,9 @@ class WorkflowEngine(SessionEngine):
                 ) and any(
                     prior["outcome"] == "approved"
                     and self.template.tasks[prior["task"]].checks_input("approved")
-                    and read_record(
-                        self.area.room.root / "artifacts" / f"{prior['artifact']}.json"
-                    )["version"]
+                    and read_record(self.area.runtime / "artifacts" / f"{prior['artifact']}.json")[
+                        "version"
+                    ]
                     == before_version
                     for prior in self.state["run"]["executions"]
                 ):
@@ -377,108 +423,187 @@ class WorkflowEngine(SessionEngine):
             session["recovering"] = False
         self._visit(destination, incoming)
 
-    def apply(self, kind: str, payload: dict) -> None:
-        """Validate workflow operations alongside existing session operations."""
-        if self.state.get("retiring") or self.state.get("retired"):
-            if kind not in {"workflow-retire", "stop", "supervisor-stop", "reconcile-area"}:
-                raise ValueError("job is retiring or archived; no further work can start")
-        if kind == "workflow-retire":
-            if (self.state.get("run") or {}).get("status") != "completed":
-                raise ValueError("only completed jobs may retire for archival")
-            self.state["retiring"] = True
-            for session in self.state["sessions"].values():
-                if session["status"] not in {"stopped", "stopping"}:
-                    super().apply("stop", {"session_id": session["id"]})
-            return
-        if kind == "workflow-cancel":
-            self._cancel()
-            return
-        if kind == "workflow-retry":
-            self.area.validate()
-            self._retry(payload)
-            return
+    def _handlers(self) -> dict[str, Callable[[dict], None]]:
+        """Extend session operations with the workflow's explicit task operations."""
+        return {
+            **super()._handlers(),
+            "launch": self._reject_manual_launch,
+            "workflow-start": self._start,
+            "workflow-retire": self._retire,
+            "workflow-cancel": self._cancel,
+            "workflow-retry": self._retry,
+            "workflow-message": self._send_message,
+            "workflow-ack": self._acknowledge_execution,
+            "workflow-report": self._report,
+        }
+
+    def _require_open_job(self, kind: str) -> None:
+        """Retirement permits only teardown, idempotent retirement, and identity repair."""
+        if (self.state.get("retiring") or self.state.get("retired")) and kind not in {
+            "workflow-retire",
+            "stop",
+            "supervisor-stop",
+            "reconcile-area",
+        }:
+            raise ValueError("job is retiring or archived; no further work can start")
+
+    def _require_uncanceled_run(self, kind: str) -> None:
+        """Cancellation permits only teardown and identity repair."""
         run = self.state.get("run")
         if (
             run
             and run["status"] in {"canceling", "canceled"}
-            and kind not in {"stop", "supervisor-stop", "reconcile-area"}
+            and kind
+            not in {
+                "workflow-cancel",
+                "stop",
+                "supervisor-stop",
+                "reconcile-area",
+            }
         ):
             raise ValueError("workflow is canceled; no further work can start")
-        if kind == "launch":
-            raise ValueError("workflow roles are launched by the active step")
-        if kind == "workflow-start":
-            if self.state.get("run"):
-                raise ValueError("workflow is already started")
-            self.state["run"] = WorkflowRun(
-                id=self.definition["run_id"], job_id=self.definition["job"]["id"]
-            ).model_dump()
-            self._visit(self.template.entry, {})
-            return
-        if kind in {"workflow-ack", "workflow-report"}:
+
+    def _guard(self, kind: str, payload: dict) -> None:
+        """Apply pause, retirement, cancellation, and task-version preconditions uniformly."""
+        super()._guard(kind, payload)
+        self._require_open_job(kind)
+        self._require_uncanceled_run(kind)
+        if kind in {"workflow-retry", "workflow-message", "workflow-ack", "workflow-report"}:
             self.area.validate()
-            execution, session = self._owner(payload)
-            if payload.get("input_artifact") != execution["input"].get("artifact"):
-                raise ValueError("acknowledge and report the exact assigned input artifact")
-            if kind == "workflow-ack":
-                execution["status"] = "acknowledged"
-                if session:
-                    execution["generation"] = session["generation"]
-                    super().apply("acknowledge", {**payload, "work_id": execution["id"]})
-                return
-            if execution["status"] != "acknowledged":
-                raise ValueError("acknowledge the assignment before reporting")
-            if session and (
-                session["work"]["status"] != "acknowledged"
-                or execution["generation"] != session["generation"]
-            ):
-                raise ValueError(
-                    "acknowledge this execution in the current generation before reporting"
-                )
-            outcome, summary = payload.get("outcome"), payload.get("summary")
-            if not isinstance(outcome, str) or not isinstance(summary, str) or len(summary) > 16384:
-                raise ValueError("outcome and a bounded summary are required")
-            destination = transition(self.template, execution["task"], outcome)
-            specialists = self._specialists(execution, payload, outcome)
-            pr = (
-                PullRequest.model_validate(payload["pr"]).model_dump()
-                if payload.get("pr") is not None
-                else None
-            )
-            if outcome in self.template.tasks[execution["task"]].requires_pr and pr is None:
-                raise ValueError("this task requires repository-qualified PR metadata")
-            artifact = capture(self.area, self.state["run"]["id"], execution["id"])
-            if self.template.tasks[execution["task"]].checks_input(outcome) and execution[
-                "input"
-            ].get("artifact"):
-                captured = read_record(self.area.room.root / "artifacts" / f"{artifact}.json")
-                verify(self.area, execution["input"]["artifact"], version=captured["version"])
-            self.area.validate()
-            execution.update(
-                status="completed", outcome=outcome, summary=summary, artifact=artifact
-            )
-            if session:
-                session["work"]["status"] = "completed"
-            if pr is not None:
-                self.state["pr"] = pr
-            self._route_report(
-                execution,
-                destination,
-                {
-                    "execution_id": execution["id"],
-                    "outcome": outcome,
-                    "summary": summary,
-                    "artifact": execution["artifact"],
-                },
-                specialists,
-                payload.get("specialist_reason"),
-            )
-            return
         if kind == "disposition" and payload.get("status") == "completed":
             raise ValueError("workflow completion requires workflow report with an allowed outcome")
-        super().apply(kind, payload)
+
+    def _reject_manual_launch(self, payload: dict) -> None:
+        """Workflow dispatch alone may choose which role starts."""
+        raise ValueError("workflow roles are launched by the active step")
+
+    def _start(self, payload: dict) -> None:
+        """Start one immutable workflow run and visit its entry task."""
+        if self.state.get("run"):
+            raise ValueError("workflow is already started")
+        self.state["run"] = WorkflowRun(
+            id=self.definition["run_id"], job_id=self.definition["job"]["id"]
+        ).model_dump()
+        self._visit(self.template.entry, {})
+
+    def _retire(self, payload: dict) -> None:
+        """Retire a completed job before retaining its accepted code."""
+        if (self.state.get("run") or {}).get("status") != "completed":
+            raise ValueError("only completed jobs may retire for archival")
+        self.state["retiring"] = True
+        for session in self.state["sessions"].values():
+            if session["status"] not in {"stopped", "stopping"}:
+                self._stop({"session_id": session["id"]})
+
+    def _send_message(self, payload: dict) -> None:
+        """Attribute an outgoing message before any mailbox delivery."""
+        run = self.state["run"]
+        execution, _ = self._owner(payload)
+        item = MailboxMessage.model_validate({**payload.get("message", {}), "created_at": now()})
+        if item.from_ != execution["participant"]:
+            raise ValueError("message sender must own the execution")
+        if item.to not in {*self.area.data["roles"], "coordinator"}:
+            raise ValueError("message recipient must belong to this job")
+        self.area.room.read_signature(item.to)
+        if len(item.body.encode()) > 16384 or len(item.title.encode()) > 256:
+            raise ValueError("message body/title exceeds 16384/256 bytes")
+        if len(item.to_markdown().encode()) > 32768:
+            raise ValueError("message exceeds 32 KiB including metadata")
+        if len(execution["sent_messages"]) >= 64:
+            raise ValueError("execution exceeds 64 sent messages")
+        if any(item.id == m["id"] for e in run["executions"] for m in e["sent_messages"]):
+            raise ValueError("message ID already belongs to this run")
+        item = item.model_copy(
+            update={
+                "run_id": run["id"],
+                "execution_id": execution["id"],
+                "created_at": now(),
+            }
+        )
+        execution["sent_messages"].append(item.model_dump(by_alias=True))
+
+    def _assigned_execution(self, payload: dict) -> tuple[dict, dict | None]:
+        """Validate ownership and the exact input shared by acknowledgment and reporting."""
+        execution, session = self._owner(payload)
+        if payload.get("input_artifact") != execution["input"].get("artifact"):
+            raise ValueError("acknowledge and report the exact assigned input artifact")
+        return execution, session
+
+    def _acknowledge_execution(self, payload: dict) -> None:
+        """Accept responsibility for the exact task and current session generation."""
+        execution, session = self._assigned_execution(payload)
+        execution["status"] = "acknowledged"
+        if session:
+            execution["generation"] = session["generation"]
+            self._work_status({**payload, "work_id": execution["id"]}, kind="acknowledge")
+
+    def _report(self, payload: dict) -> None:
+        """Validate an outcome, retain its evidence, and route the next task."""
+        execution, session = self._assigned_execution(payload)
+        if execution["status"] != "acknowledged":
+            raise ValueError("acknowledge the assignment before reporting")
+        if session and (
+            session["work"]["status"] != "acknowledged"
+            or execution["generation"] != session["generation"]
+        ):
+            raise ValueError(
+                "acknowledge this execution in the current generation before reporting"
+            )
+        outcome, summary = payload.get("outcome"), payload.get("summary")
+        if not isinstance(outcome, str) or not isinstance(summary, str) or len(summary) > 16384:
+            raise ValueError("outcome and a bounded summary are required")
+        destination = transition(self.template, execution["task"], outcome)
+        specialists = self._specialists(execution, payload, outcome)
+        pr = (
+            PullRequest.model_validate(payload["pr"]).model_dump()
+            if payload.get("pr") is not None
+            else None
+        )
+        if outcome in self.template.tasks[execution["task"]].requires_pr and pr is None:
+            raise ValueError("this task requires repository-qualified PR metadata")
+        artifact = capture(
+            self.area,
+            self.state["run"]["id"],
+            execution["id"],
+            base_commit=execution["base_commit"],
+        )
+        if self.template.tasks[execution["task"]].checks_input(outcome) and execution["input"].get(
+            "artifact"
+        ):
+            captured = read_record(self.area.runtime / "artifacts" / f"{artifact}.json")
+            verify(self.area, execution["input"]["artifact"], version=captured["version"])
+        self.area.validate()
+        execution.update(
+            status="completed",
+            outcome=outcome,
+            summary=summary,
+            artifact=artifact,
+            completed_at=now(),
+        )
+        if session:
+            session["work"]["status"] = "completed"
+        if pr is not None:
+            self.state["pr"] = pr
+        self._route_report(
+            execution,
+            destination,
+            {
+                "execution_id": execution["id"],
+                "outcome": outcome,
+                "summary": summary,
+                "artifact": execution["artifact"],
+            },
+            specialists,
+            payload.get("specialist_reason"),
+        )
 
     def advance(self) -> None:
         """Bind ready sessions or humans and publish only already committed assignments."""
+        for execution in (self.state.get("run") or {}).get("executions", []):
+            for item in execution["sent_messages"]:
+                if item["id"] not in self._delivered_messages:
+                    mailbox(self.area, item["to"], item)
+                    self._delivered_messages.add(item["id"])
         if self.state.get("retiring"):
             if all(session["status"] == "stopped" for session in self.state["sessions"].values()):
                 self.state.update(retiring=False, retired=True, shutdown=True)
@@ -504,7 +629,7 @@ class WorkflowEngine(SessionEngine):
             None,
         )
         if role["kind"] == "agent" and not session:
-            super().apply("launch", {"participant": execution["participant"]})
+            self._launch({"participant": execution["participant"]})
             self.commit("role-launch-planned", {"participant": execution["participant"]})
             return
         task = self.template.tasks[execution["task"]]
@@ -518,11 +643,11 @@ class WorkflowEngine(SessionEngine):
         ):
             if session["status"] == "ready":
                 execution["reset_generation"] = session["generation"] + 1
-                super().apply("stop", {"session_id": session["id"]})
+                self._stop({"session_id": session["id"]})
                 self.commit("fresh-review-stop-planned", {"execution_id": execution["id"]})
                 return
             if execution.get("reset_generation") is not None and session["status"] == "stopped":
-                super().apply("replace", {"session_id": session["id"]})
+                self._restart({"session_id": session["id"]}, resume=False)
                 self.commit("fresh-review-session-planned", {"execution_id": execution["id"]})
                 return
         if role["kind"] == "agent" and (not session["ready"] or session["status"] != "ready"):
@@ -552,6 +677,7 @@ class WorkflowEngine(SessionEngine):
                 f"Allowed outcomes: {', '.join(self.template.tasks[execution['task']].transitions)}\n"
                 f"Before acting, run: {command} acknowledge {arguments}\n"
                 f"Report with: {command} report {arguments} --outcome OUTCOME --summary SUMMARY\n"
+                f"Send a task message with: {shlex.quote(sys.executable)} -m ctlrm --root {shlex.quote(str(self.area.root))} send --from {execution['participant']} --to RECIPIENT --execution-id {execution['id']} --title TITLE --body BODY\n"
                 "After native resume use your CURRENT generation in these commands. "
                 "Do not choose the next recipient; the workflow routes accepted outcomes. "
                 "After an accepted report, finish your turn and wait; do not perform further work."

@@ -1,0 +1,85 @@
+{
+  "date": "2026-09-06",
+  "application": "Pocket Tasks",
+  "description": "Standard-library Python/SQLite to-do CLI",
+  "project": "pocket-tasks",
+  "job": "codex-build",
+  "provenance": {
+    "managed_agent_build": true,
+    "provider": "codex",
+    "terminal_manager": "libtmux",
+    "app_commit": "381181ba9dd3d8e37703f81e56141b606272d92c",
+    "runtime_validation_commit": "d0cba76"
+  },
+  "tasks": [
+    {
+      "task": "implement",
+      "outcome": "completed",
+      "artifacts": [
+        "commit",
+        "message",
+        "report"
+      ]
+    },
+    {
+      "task": "review_blast_radius",
+      "outcome": "approved",
+      "artifacts": [
+        "commit",
+        "message",
+        "report"
+      ]
+    },
+    {
+      "task": "review_performance",
+      "outcome": "approved",
+      "artifacts": [
+        "commit",
+        "message",
+        "report"
+      ]
+    }
+  ],
+  "checks": {
+    "app_tests_passed": 12,
+    "app_cli_acceptance_passed": 8,
+    "app_browser_checks_passed": 7,
+    "ruff": "passed",
+    "automatic_performance_specialist_trigger": "more than 100 tracked changed lines",
+    "supervisor_replay_preserved_review_sessions": true,
+    "writer_generation": 2,
+    "same_native_session": true,
+    "no_task_repeated": true,
+    "all_owned_agents_stopped": true,
+    "supervisor_stopped": true,
+    "counterpart_gate": "pending"
+  },
+  "scope": {
+    "workflow": "local ship variant",
+    "counterpart_review": "pending source-transmission approval",
+    "remote_pr_and_ci": "not exercised; no remote was configured",
+    "unstarted_job": "build used a Claude profile and was never launched after source-transmission rejection"
+  },
+  "source_evidence": [
+    {
+      "file": "app-recovery-and-cleanup.json",
+      "sha256": "2d3a3709dbca63f590d977fa788111044219dac446cec69046f1b88b4c2fa398"
+    },
+    {
+      "file": "app-smoke.json",
+      "sha256": "e691453b8a01229738f505452308d2e692f2fc7cc648dc2ae2e4269487ecc08b"
+    },
+    {
+      "file": "app-tests.txt",
+      "sha256": "d03d80a8ed6032b13cde017dd9220fb6d23912d6fb2dbe3ca7d4bb808379b02e"
+    },
+    {
+      "file": "app-browser-checks.json",
+      "sha256": "3b753abccc14a3d6a1cac18a64fca424c654a6fcf8964324917fd6600946bf5b"
+    },
+    {
+      "file": "app-runtime-replay.json",
+      "sha256": "8f3c6fabdd3418e3e2a60180e573646696731393e12d38dc2a94f04035d9368c"
+    }
+  ]
+}

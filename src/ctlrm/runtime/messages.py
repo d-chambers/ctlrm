@@ -25,9 +25,8 @@ class MailboxMessage(BaseModel):
     title: str
     status: str
     created_at: str
-    workflow_id: str | None = None
     run_id: str | None = None
-    node_id: str | None = None
+    execution_id: str | None = None
     files: list[str] = Field(default_factory=list)
     body: str = ""
 

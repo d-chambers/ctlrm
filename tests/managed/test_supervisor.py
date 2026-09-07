@@ -60,7 +60,7 @@ class TestLockProbe:
     def test_probe_does_not_change_lock(self, area) -> None:
         """A status reader neither changes lock metadata nor contends for acquisition."""
         with area.journal.writer():
-            path = area.room.root / "supervisor/lock"
+            path = area.runtime / "supervisor/lock"
             original = path.stat()
             content = path.read_bytes()
             for _ in range(10):
@@ -73,3 +73,39 @@ class TestLockProbe:
         """A short initialization lock must not masquerade as a running daemon."""
         with area.journal.writer(purpose="initialize"):
             assert not running(area)
+
+
+class TestSupervisorEntrypoints:
+    """The operational surface observes lock ownership and durable requests."""
+
+    def test_foreground_stop(self, area) -> None:
+        """The real foreground loop commits an already submitted stop and releases its lock."""
+        from ctlrm.managed.supervisor import serve
+
+        request = area.journal.submit("supervisor-stop", {})
+        serve(area, interval=0.1)
+        state = area.journal.replay()[0]
+        assert state["shutdown"]
+        assert state["requests"][request]["status"] == "accepted"
+        assert not running(area)
+
+    def test_pid_file_is_not_liveness(self, area) -> None:
+        """A retained or corrupt PID file alone never claims a live supervisor."""
+        from ctlrm.managed.storage import encoded
+
+        path = area.runtime / "supervisor/lock"
+        path.write_text(encoded({"purpose": "supervisor", "pid": 999999999}))
+        assert not running(area)
+        path.write_text("not a lock record")
+        assert not running(area)
+
+    def test_invalid_interval(self, area) -> None:
+        """Both foreground and detached entry points reject invalid polling rates."""
+        import pytest
+        from ctlrm.managed.supervisor import serve
+
+        for entrypoint in (start, serve):
+            for interval in (0, 61):
+                with pytest.raises(ValueError, match="interval"):
+                    entrypoint(area, interval=interval)
+        assert not running(area)

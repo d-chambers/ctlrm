@@ -293,7 +293,7 @@ class TestProjectArchive:
         client, _ = store.start_job("auth", "a")
         finish(client)
         last = store.job_status("auth", "a")["run"]["executions"][-1]
-        artifact = client.area.room.root / "artifacts" / f"{last['artifact']}.json"
+        artifact = client.area.runtime / "artifacts" / f"{last['artifact']}.json"
         record = json.loads(artifact.read_text())
         (client.area.root / "source.txt").write_text("unaccepted later version\n")
         record["version"] = fingerprint(client.area.root)

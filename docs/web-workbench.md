@@ -1,0 +1,54 @@
+# Web workbench
+
+`ctlrm serve` serves the real project store at a loopback URL. Copy the complete URL, including its initial capability fragment, into a browser on the same computer. Each server start creates a new capability. API reads and writes require it; WebSocket attachment additionally checks the browser origin. The server rejects remote hosts and cross-origin requests. All scripts, styles, and terminal libraries are bundled locally. This is a local application for one OS user, not a remote multi-user service.
+
+## Projects and jobs
+
+The Projects sidebar filters active/completed or archived records. Search matches project goals, codebase paths, job titles, and repository-qualified PR metadata. Click a project for its summary, or double-click/Open project for a reusable workspace tab. Completed jobs have a checkmark in both the summary and design lists. The project workspace groups participants by job; its job selector changes the workflow and code context.
+
+New project records a local committed Git codebase, goals, and optional design text. Add job snapshots the selected YAML workflow, job instructions, acceptance criteria, dependencies, and base revision. The packaged ship, implement/review, and single-agent workflows are editable before creating the job. Provider profiles, model arguments, and permissions remain explicit in the YAML. Start job provisions the recorded worktree and starts the existing background supervisor. Reads and terminal attachment never launch an agent. Assign PR records a number, repository, and optional link; it does not publish a PR.
+
+Overview displays the actual task graph, including outcome cycles and optional specialist routes. Clicking a node opens its instructions, outcome policy, execution history, and input/output manifests. The engine runs tasks sequentially through the declared outcome transitions. An active task indicator describes committed assignment/message activity; process state and recovery state are shown separately. It does not infer provider CPU activity or guarantee that a provider is currently generating tokens.
+
+## Human responses and sessions
+
+Needs you lists active assignments to human participants across projects. A response explicitly accepts the assigned human role, acknowledges the execution, and reports its outcome with the input artifact shown in the form. Stale executions and changed review inputs are rejected by the existing supervisor. Optional specialist requests and PR metadata are available when the workflow declares them. Human approval remains separate from provider tool permissions.
+
+Open terminal attaches a disposable PTY client to the current owned tmux generation. Input and output are streamed to the existing agent. The Session button shows current process/recovery details, recorded native restart instructions, recent conversation messages, and explicit Stop, Resume, or Replace operations. Resume and Replace require the live process to be stopped first. Browser operations carry the observed generation, so an old view cannot stop a replacement session.
+
+Managed native Codex uses its existing exec/resume runner, so the terminal displays its real output and the message composer queues conversation input between turns. Messages do not assign or complete workflow tasks. A claimed message whose runner is interrupted is marked uncertain and is never automatically replayed. Inspect its result before explicitly resending. Replacing the native conversation cancels its queued messages. Interactive providers use direct terminal input instead of the composer.
+
+The sidebar and terminal dividers support dragging, arrow keys, Home/End, and remembered sizes. Full screen fills the browser viewport; Restore or Escape returns the same terminal and draft to its panel. Switching project tabs keeps an open terminal attached to its labeled job. Closing the view detaches only its client. Reconnect reattaches the same generation and restores the tmux pane contents; a changed generation requires reopening from Participants.
+
+## Documents, artifacts, and archival
+
+Design shows the project document, planned jobs, goals, and acceptance criteria. Artifacts shows project context and immutable execution reports, including older visits labeled as prior executions. Manifests record the source version, input identity, HEAD, and per-file hashes; they do not by themselves store every historical file's bytes. Browsing a manifest returns the matching retained blob or unchanged worktree file and refuses to present newer content as that version. Code displays bounded UTF-8 text from the current worktree or retained archive inventory. The viewer refuses symlinks, path traversal, binary files, and files over 1 MiB. Editing remains in the agent terminal or an external editor.
+
+Task details also lists commits and sent messages for the selected execution. Input commits are labeled separately from commits introduced between the execution's initial HEAD and accepted outcome. Commit messages, authorship, timestamps, and diffs are retained when the outcome is submitted; at most the newest 50 commits are listed, and previews over 128 KiB are visibly truncated. Git preview work shares a five-second budget per handoff and stops reading at the display limit. Unavailable previews are labeled and do not reject an otherwise valid code artifact. Rewritten or missing history shows the resulting HEAD with an explanation. Unreported work has no retained output commits yet. These records remain readable after archival and worktree removal.
+
+Double-click a commit, mailbox message, or outcome report to open its text in a separate read-only editor window. Enter and the Open button do the same. Closing the viewer returns focus to the artifact row and leaves the task details open. Text is displayed literally, including Markdown and HTML; it can be selected and copied.
+
+Outgoing workflow mailbox messages use `ctlrm --root WORKTREE send --from PARTICIPANT --to RECIPIENT --execution-id EXECUTION --title TITLE --body BODY`. The assignment includes the execution ID. Both participants must be registered in the job, or the recipient may be its coordinator. The supervisor validates the active execution and current agent generation, then records the message before delivering it to the recipient's immutable inbox. Each execution permits up to 64 messages, with a 16 KiB body and 32 KiB total metadata/body limit. Task artifacts show these accepted outgoing messages and the outcome report sent to the coordinator. The workflow routes the accepted report to the next assignment. Provider-internal conversations and incoming human composer messages are not outgoing task messages.
+
+Activity merges recent accepted project/job events into a bounded feed; the durable journals retain the full history. Periodic snapshot polling pauses in hidden browser tabs and refreshes when they become visible. Archive requires all jobs to be completed, retires their owned processes, retains the accepted code, and creates the existing verified ZIP. Central metadata, PR search, reports, and retained code remain readable. Archive does not delete the worktrees. Archive download, remote access, authentication between multiple OS users, automatic provider permission approval, and a document/code editor are outside this initial web workbench.
+
+## Verification
+
+Run `uv run pytest --cov ctlrm --cov-report term-missing` and `uvx prek run --all-files`. The web tests use disposable real Git repositories and the actual supervisor transition engine; the terminal test streams keyboard/output traffic over a WebSocket through a real tmux client and verifies that detaching leaves the agent running. `npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix frontend run check` reproduces the locally bundled terminal assets and checks authored frontend syntax/formatting. `uv build` includes the browser assets, licenses, and canonical YAML templates in the wheel.
+
+Acceptance records for the workbench and both managed sample applications are indexed in [Acceptance evidence](evidence/readme.md). Each record distinguishes real providers from deterministic browser fixtures and lists pending review or remote-workflow checks.
+
+CI runs frontend syntax/format checks, verifies that rebuilding terminal assets leaves the checked-in bundle unchanged, and records the slowest 25 Python tests on both supported Python versions. It also installs the wheel into a separate virtual environment and runs the real `ctlrm serve` CLI from a disposable directory. The Chromium check loads bundled assets and workflow templates, opens a project and its task graph, and reads retained commits, messages, and reports through the editor. Its fixture uses real Git/project/workflow records with human roles; it does not launch model providers or substitute for the managed-agent acceptance runs.
+
+To reproduce the installed-wheel browser check after `uv sync --locked` and `npm --prefix frontend ci`:
+
+```sh
+wheel_check=$(mktemp -d)
+uv build --out-dir "$wheel_check/dist"
+uv venv "$wheel_check/venv"
+uv pip install --python "$wheel_check/venv/bin/python" "$wheel_check"/dist/*.whl
+npm --prefix frontend exec -- playwright install --with-deps chromium --only-shell
+CTLRM_BROWSER_PYTHON="$wheel_check/venv/bin/python" CTLRM_BROWSER_REQUIRE_WHEEL=1 npm --prefix frontend run test:browser
+```
+
+For development, `npm --prefix frontend run test:browser` uses the repository's `.venv` by default. Browser failures retain a trace and screenshot under `frontend/test-results/`; CI uploads these together with Python JUnit results. Playwright's [CI guide](https://playwright.dev/docs/ci) describes the browser and operating-system dependency installation used here.

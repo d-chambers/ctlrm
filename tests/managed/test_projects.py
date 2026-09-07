@@ -80,7 +80,7 @@ class TestProjects:
             store.start_job("auth", "clients")
         client, request = store.start_job("auth", "core")
         assert client.area.root != Path(store.project("auth").codebase)
-        assert client.area.room.root == store.job_path("auth", "core") / "runtime"
+        assert client.area.runtime == store.job_path("auth", "core") / "runtime"
         assert (client.area.root / ".scratch/ctlrm").resolve() == store.job_path("auth", "core")
         assert not (client.area.root / ".ctlrm").is_symlink()
         assert Area.load(client.area.root).data == client.area.data
@@ -369,7 +369,7 @@ class TestReviewedProjectBoundaries:
             store.assign_pr("auth", name, number, "owner/repo")
         client, _ = store.start_job("auth", "a")
         finish(client)
-        event = sorted((client.area.room.root / "events").glob("*.json"))[-1]
+        event = sorted((client.area.runtime / "events").glob("*.json"))[-1]
         event.write_text("{}")
         assert store.job_status("auth", "a")["status"] == "invalid"
         assert store.find_pr(43)[0]["job"]["id"] == "b"
@@ -410,3 +410,32 @@ class TestWorkflowPrReporting:
         store.assign_pr("auth", "a", 43, "owner/repo")
         assert store.find_pr(42) == []
         assert store.find_pr(43)[0]["job"]["id"] == "a"
+
+
+class TestProjectSnapshots:
+    """A multi-job snapshot validates the project journal once and reuses its PR mapping."""
+
+    def test_project_replay_once(self, store, human_template, monkeypatch) -> None:
+        """Batch status reads preserve PRs without replaying the same project for every job."""
+        from collections import Counter
+        from ctlrm.managed.storage import Journal
+
+        for job in ["first", "second", "third"]:
+            store.add_job("auth", job, "Goal", human_template, job_id=job)
+        store.assign_pr("auth", "first", 42, "example/project")
+        original = Journal.replay
+        reads = Counter()
+
+        def replay(journal):
+            """Count full validations while retaining real journal parsing and checksums."""
+            reads[journal.root] += 1
+            return original(journal)
+
+        monkeypatch.setattr(Journal, "replay", replay)
+        result = store.status("auth")
+        assert len(result["jobs"]) == 3
+        assert all(job["status"] == "planned" for job in result["jobs"])
+        assert reads[store.journal("auth").root] == 1
+        assert sum(reads.values()) == 4
+        assert result["jobs"][0]["pr"]["number"] == 42
+        assert store.job_status("auth", "first")["pr"] == result["jobs"][0]["pr"]

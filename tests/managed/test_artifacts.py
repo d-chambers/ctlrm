@@ -26,7 +26,7 @@ class TestArtifacts:
         target.write_text("external content")
         (area.root / "link").symlink_to(target)
         artifact = capture(area, "run", "execution")
-        record = read_record(area.room.root / "artifacts" / f"{artifact}.json")
+        record = read_record(area.runtime / "artifacts" / f"{artifact}.json")
         assert record["version"]["files"]["link"]["symlink"]
         assert all(not name.startswith(".ctlrm") for name in record["version"]["files"])
         target.write_text("unrelated target changed")

@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Control room</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/vendor/xterm.css" />
+    <link rel="stylesheet" href="/static/app.css" />
+    <script defer src="/static/vendor/xterm.js"></script>
+    <script defer src="/static/vendor/addon-fit.js"></script>
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="topbar">
+        <div class="brand">
+          <span class="mark"><i></i><i></i><i></i></span>Control room
+        </div>
+        <label class="search"
+          ><span aria-hidden="true">⌕</span
+          ><input
+            id="search"
+            type="search"
+            placeholder="Search projects or PR number"
+            aria-label="Search projects or PR number"
+          /><kbd>Ctrl K</kbd></label
+        >
+        <div class="top-right">
+          <span id="connection" role="status">Connecting…</span
+          ><span class="user" title="Local user">You</span>
+        </div>
+      </header>
+      <nav id="nav" class="tabs" aria-label="Workspace tabs"></nav>
+      <div class="shell">
+        <aside
+          id="sidebar"
+          class="sidebar"
+          aria-label="Project navigation"
+        ></aside>
+        <div
+          id="sidebar-resizer"
+          class="resize-side"
+          role="separator"
+          aria-label="Sidebar width"
+          aria-orientation="vertical"
+          tabindex="0"
+          aria-valuemin="230"
+          aria-valuemax="600"
+          aria-valuenow="296"
+        ></div>
+        <div class="center">
+          <main id="main" tabindex="-1"></main>
+          <div id="terminal-home">
+            <section
+              id="terminal"
+              class="live-terminal"
+              aria-label="Agent terminal"
+              hidden
+            >
+              <div
+                id="terminal-resizer"
+                class="resize-terminal"
+                role="separator"
+                aria-label="Terminal height"
+                aria-orientation="horizontal"
+                tabindex="0"
+                aria-valuemin="240"
+                aria-valuemax="700"
+                aria-valuenow="360"
+              ></div>
+              <header class="terminal-header">
+                <strong id="terminal-title">Agent terminal</strong
+                ><span id="terminal-status" role="status"></span>
+                <div class="terminal-buttons">
+                  <button data-action="terminal-details">Session</button
+                  ><button data-action="reconnect" title="Reconnect this view">
+                    Reconnect</button
+                  ><button id="fullscreen-button" data-action="fullscreen">
+                    Full screen</button
+                  ><button
+                    data-action="close-terminal"
+                    aria-label="Close terminal view"
+                  >
+                    ×
+                  </button>
+                </div>
+              </header>
+              <div id="terminal-output"></div>
+              <form id="conversation" hidden>
+                <label for="conversation-text">Message this conversation</label>
+                <div class="conversation-row">
+                  <textarea
+                    id="conversation-text"
+                    rows="2"
+                    maxlength="16384"
+                    placeholder="Delivered between agent turns"
+                  ></textarea
+                  ><button class="primary" type="submit">Send</button>
+                </div>
+                <div id="conversation-status" role="status"></div>
+              </form>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="fullscreen-root"></div>
+    <dialog id="dialog"><div id="dialog-content"></div></dialog>
+    <dialog id="artifact-editor" aria-labelledby="artifact-editor-title">
+      <div class="dialog-head">
+        <h2 id="artifact-editor-title"></h2>
+        <button id="artifact-editor-close" aria-label="Close text viewer">
+          ×
+        </button>
+      </div>
+      <p id="artifact-editor-detail" class="small muted"></p>
+      <p class="small">Read-only · Select and copy text freely</p>
+      <textarea
+        id="artifact-editor-text"
+        aria-label="Artifact text"
+        readonly
+        spellcheck="false"
+        wrap="off"
+      ></textarea>
+    </dialog>
+    <div id="notice" role="status" hidden></div>
+  </body>
+</html>

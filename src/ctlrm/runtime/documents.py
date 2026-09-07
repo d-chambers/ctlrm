@@ -20,8 +20,6 @@ def parse_markdown_document(text: str) -> tuple[dict[str, object], str]:
     metadata = load_yaml(front_matter)
     if not isinstance(metadata, dict):
         raise ValueError("YAML front matter must be a mapping")
-    if not all(isinstance(key, str) for key in metadata):
-        raise ValueError("YAML front matter keys must be strings")
     return metadata, body.strip("\n")
 
 

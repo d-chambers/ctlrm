@@ -1,0 +1,283 @@
+{
+  "date": "2026-09-06",
+  "python": "3.11.14",
+  "command": "uv run pytest --cov ctlrm --cov-report term-missing --durations=25 -q --tb=short",
+  "final_extra_argument": "--junitxml=test-results/python.xml",
+  "runs": [
+    {
+      "revision": "d0cba76",
+      "passed": 323,
+      "coverage_percent": 88,
+      "seconds": 106.72,
+      "slowest": [
+        {
+          "seconds": 2.26,
+          "phase": "call",
+          "test": "tests/web/test_terminal_cleanup.py::TestCanceledAttachment::test_releases_resources[True]"
+        },
+        {
+          "seconds": 1.87,
+          "phase": "call",
+          "test": "tests/web/test_task_artifacts.py::TestTaskArtifacts::test_rounds_and_archive"
+        },
+        {
+          "seconds": 1.82,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_text_converter_cannot_change_index"
+        },
+        {
+          "seconds": 1.77,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestWorkflow::test_review_loop_and_replay"
+        },
+        {
+          "seconds": 1.75,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_recovery_rejects_changed_records"
+        },
+        {
+          "seconds": 1.71,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestFreshRetry::test_stop_retry_resume"
+        },
+        {
+          "seconds": 1.56,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestFreshReviewSessions::test_replay_between_stop_and_replace"
+        },
+        {
+          "seconds": 1.39,
+          "phase": "setup",
+          "test": "tests/managed/test_interactions.py::TestNativeInteractions::test_delivery_preserves_work"
+        },
+        {
+          "seconds": 1.38,
+          "phase": "call",
+          "test": "tests/managed/test_specialists.py::TestSpecialistExecution::test_findings_and_limits"
+        },
+        {
+          "seconds": 1.29,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestWorkflow::test_rejections_and_snapshot"
+        },
+        {
+          "seconds": 1.21,
+          "phase": "call",
+          "test": "tests/managed/test_supervisor.py::TestDetachedSupervisor::test_terminal_survives_supervisor_restart"
+        },
+        {
+          "seconds": 1.19,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestAutomaticWorkflow::test_lazy_launch_and_stale_approval"
+        },
+        {
+          "seconds": 1.17,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestWorkflow::test_execution_limit"
+        },
+        {
+          "seconds": 1.16,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestAutomaticWorkflow::test_retry_is_new_visit"
+        },
+        {
+          "seconds": 1.15,
+          "phase": "call",
+          "test": "tests/web/test_app.py::TestProjectFlows::test_stale_review"
+        },
+        {
+          "seconds": 1.13,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestDeliveryRecovery::test_crash_before_mailbox"
+        },
+        {
+          "seconds": 1.13,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestHumanIdentity::test_conflicting_signature"
+        },
+        {
+          "seconds": 1.09,
+          "phase": "call",
+          "test": "tests/web/test_terminal.py::TestTerminalBridge::test_attach_input_detach"
+        },
+        {
+          "seconds": 1.09,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestCounterpartBoundaries::test_recovered_work_requires_ack"
+        },
+        {
+          "seconds": 1.08,
+          "phase": "call",
+          "test": "tests/managed/test_projects.py::TestProjects::test_central_handoff_and_dependency"
+        },
+        {
+          "seconds": 1.07,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestApprovalVersionRace::test_captured_version_is_verified"
+        },
+        {
+          "seconds": 1.04,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_complete_and_archive"
+        },
+        {
+          "seconds": 1.03,
+          "phase": "call",
+          "test": "tests/managed/test_specialists.py::TestSpecialistExecution::test_queue_and_replay"
+        },
+        {
+          "seconds": 1.0,
+          "phase": "call",
+          "test": "tests/managed/test_specialists.py::TestCompletedReviewProvenance::test_changed_continuation_retry"
+        },
+        {
+          "seconds": 0.96,
+          "phase": "call",
+          "test": "tests/web/test_app.py::TestProjectFlows::test_stale_execution"
+        }
+      ],
+      "source": "baseline-tests.txt",
+      "sha256": "70d140c97856552edf29631b48b21a2698e2cd05daada2c57b85eddd2fa2da73"
+    },
+    {
+      "revision": "a7a01da",
+      "passed": 324,
+      "coverage_percent": 88,
+      "seconds": 128.3,
+      "slowest": [
+        {
+          "seconds": 2.28,
+          "phase": "call",
+          "test": "tests/web/test_terminal_cleanup.py::TestCanceledAttachment::test_releases_resources[True]"
+        },
+        {
+          "seconds": 2.27,
+          "phase": "call",
+          "test": "tests/web/test_task_artifacts.py::TestTaskArtifacts::test_rounds_and_archive"
+        },
+        {
+          "seconds": 2.17,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestAutomaticWorkflow::test_lazy_launch_and_stale_approval"
+        },
+        {
+          "seconds": 1.98,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestWorkflow::test_review_loop_and_replay"
+        },
+        {
+          "seconds": 1.87,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestFreshRetry::test_stop_retry_resume"
+        },
+        {
+          "seconds": 1.7,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestFreshReviewSessions::test_replay_between_stop_and_replace"
+        },
+        {
+          "seconds": 1.69,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestWorkflow::test_one_agent_and_second_worktree"
+        },
+        {
+          "seconds": 1.69,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_text_converter_cannot_change_index"
+        },
+        {
+          "seconds": 1.64,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_complete_waits_for_supervisor[False]"
+        },
+        {
+          "seconds": 1.63,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_recovery_rejects_changed_records"
+        },
+        {
+          "seconds": 1.56,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_changed_completion_requires_restore"
+        },
+        {
+          "seconds": 1.5,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestCounterpartBoundaries::test_recovered_work_requires_ack"
+        },
+        {
+          "seconds": 1.47,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestAutomaticWorkflow::test_retry_is_new_visit"
+        },
+        {
+          "seconds": 1.43,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_complete_waits_for_supervisor[True]"
+        },
+        {
+          "seconds": 1.42,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_rebuild_deleted_archive"
+        },
+        {
+          "seconds": 1.42,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_self_consistent_zip_tamper"
+        },
+        {
+          "seconds": 1.39,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_symlink_targets_excluded"
+        },
+        {
+          "seconds": 1.37,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_final_artifact_identity"
+        },
+        {
+          "seconds": 1.31,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_retirement_waits_for_process_exit[True]"
+        },
+        {
+          "seconds": 1.28,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestApprovalVersionRace::test_captured_version_is_verified"
+        },
+        {
+          "seconds": 1.27,
+          "phase": "call",
+          "test": "tests/managed/test_supervisor.py::TestDetachedSupervisor::test_terminal_survives_supervisor_restart"
+        },
+        {
+          "seconds": 1.26,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestWorkflow::test_execution_limit"
+        },
+        {
+          "seconds": 1.25,
+          "phase": "call",
+          "test": "tests/managed/test_workflow_engine.py::TestReviewedWorkflowBoundaries::test_retry_attribution"
+        },
+        {
+          "seconds": 1.24,
+          "phase": "call",
+          "test": "tests/managed/test_archive.py::TestProjectArchive::test_complete_and_archive"
+        },
+        {
+          "seconds": 1.21,
+          "phase": "call",
+          "test": "tests/managed/test_specialists.py::TestReviewFixRetries::test_retry_partial_fix"
+        }
+      ],
+      "source": "final-tests.txt",
+      "sha256": "cdf73154f55b396f97b699a494a8b0b0895f423bdd39468e37c74068af943168"
+    }
+  ],
+  "assessment": "The reported 287-second run was not reproduced. The largest measured test duration remains the intentional two-second forced-kill cleanup case; remaining slow tests exercise Git, durable workflow records, or archival. Aggregate variance alone does not establish a flaky test. CI now records the slowest 25 phases and JUnit results; no durability checks, assertions, or recovery timeouts were weakened.",
+  "limits": [
+    "Local timings do not predict hosted CI performance.",
+    "One upstream Starlette/httpx deprecation warning remains."
+  ]
+}

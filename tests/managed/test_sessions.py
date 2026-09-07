@@ -354,7 +354,7 @@ class TestNativeHints:
         original = session(engine)["work"]["id"]
         restarted = SessionEngine(area, terminal)
         restarted.tick()
-        paths = list((area.room.root / "sessions" / current["id"] / "input-1").glob("*.json"))
+        paths = list((area.runtime / "sessions" / current["id"] / "input-1").glob("*.json"))
         assert len(paths) == 1 and not terminal.wakes
         assert session(restarted)["work"]["id"] == original
 

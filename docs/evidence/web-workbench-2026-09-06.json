@@ -1,0 +1,69 @@
+{
+  "date": "2026-09-06",
+  "application": "ctlrm web workbench",
+  "provenance": {
+    "managed_agent_build": false,
+    "implementation": "Direct repository development; this was not the second managed app exercise.",
+    "implementation_commits": [
+      "882b1a3",
+      "79abf3b",
+      "6019033",
+      "be0c3d8"
+    ],
+    "validated_revision": "d0cba76"
+  },
+  "validation": {
+    "workbench_browser_checks_passed": 37,
+    "native_conversation_checks_passed": 9,
+    "native_conversation_provider": "deterministic local native-protocol fixture, not an external model",
+    "task_artifact_interactions_passed": 11,
+    "real_app_browser_checks_passed": 7,
+    "full_python_tests_passed": 323,
+    "coverage_percent": 88,
+    "frontend_syntax_and_format": "passed",
+    "wheel_and_sdist": "passed"
+  },
+  "scope": {
+    "network": "loopback only",
+    "managed_apps": [
+      "Pocket Tasks",
+      "CSV Brief"
+    ],
+    "counterpart_review": "pending source-transmission approval",
+    "hosted_ci": "not run; no remote was configured"
+  },
+  "source_evidence": [
+    {
+      "file": "browser-checks.txt",
+      "sha256": "e3de32a5de38ac7f44329c78770d0580e9039e1a29aba44a04632694441d2d54"
+    },
+    {
+      "file": "native-browser-result.json",
+      "sha256": "9d424cc232aebc4ee230226d19af8e9696526299b7b969761a7362faf638e4a9"
+    },
+    {
+      "file": "task-browser-checks.txt",
+      "sha256": "5d72ae06935a5c7a15eaae6f5a203504c1e9cc1d794661f6ac41b85fe0bf0d23"
+    },
+    {
+      "file": "task-artifacts-verification.md",
+      "sha256": "78fcd9dfaf9b4859e32f839d062d9cedf233c45c99151e22c2679a1f95c69bb0"
+    },
+    {
+      "file": "app-browser-checks.json",
+      "sha256": "3b753abccc14a3d6a1cac18a64fca424c654a6fcf8964324917fd6600946bf5b"
+    },
+    {
+      "file": "final-tests.txt",
+      "sha256": "d84f8f67124631e52d088a167fd26b419fc6edaa11e1e7e0763f3b2a385ec3f9"
+    },
+    {
+      "file": "final-frontend.txt",
+      "sha256": "b1b060f1bcc3af405a6926d03490a99b07f4cdbfd02d12ff6ceeb0528ec5cddc"
+    },
+    {
+      "file": "final-build.txt",
+      "sha256": "d2986b7aa20e390482944345ea47440dc004d4cb99df9d1cdb73c0dc05923b44"
+    }
+  ]
+}
